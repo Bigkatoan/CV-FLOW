@@ -1,0 +1,314 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "title": "PipelineJSON",
+  "description": "CV-FLOW pipeline configuration — contract between Frontend, Backend, and Engine",
+  "type": "object",
+  "required": ["version", "id", "name", "nodes", "edges"],
+  "properties": {
+    "version": { "type": "string", "enum": ["1.0"] },
+    "id": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "description": { "type": "string", "maxLength": 512 },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "nodes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/Edge" }
+    }
+  },
+  "definitions": {
+    "Node": {
+      "type": "object",
+      "required": ["id", "type", "config"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": {
+          "type": "string",
+          "enum": [
+            "camera", "video_file", "image_directory",
+            "preprocess", "model_inference", "postprocess_nms",
+            "draw_roi", "draw_line", "object_tracker", "counter",
+            "python_function", "filter", "param",
+            "cpp_function",
+            "stream_viewer", "video_writer", "trigger_webhook"
+          ]
+        },
+        "label": { "type": "string" },
+        "position": {
+          "type": "object",
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          },
+          "required": ["x", "y"]
+        },
+        "config": { "$ref": "#/definitions/NodeConfig" }
+      }
+    },
+    "Edge": {
+      "type": "object",
+      "required": ["id", "source", "target", "sourceHandle", "targetHandle"],
+      "properties": {
+        "id": { "type": "string" },
+        "source": { "type": "string" },
+        "target": { "type": "string" },
+        "sourceHandle": { "type": "string" },
+        "targetHandle": { "type": "string" }
+      }
+    },
+    "NodeConfig": {
+      "type": "object",
+      "description": "Node-type-specific configuration. Each node type defines its own schema.",
+      "oneOf": [
+        { "$ref": "#/definitions/configs/CameraConfig" },
+        { "$ref": "#/definitions/configs/VideoFileConfig" },
+        { "$ref": "#/definitions/configs/ImageDirectoryConfig" },
+        { "$ref": "#/definitions/configs/PreprocessConfig" },
+        { "$ref": "#/definitions/configs/ModelInferenceConfig" },
+        { "$ref": "#/definitions/configs/PostprocessNMSConfig" },
+        { "$ref": "#/definitions/configs/DrawROIConfig" },
+        { "$ref": "#/definitions/configs/DrawLineConfig" },
+        { "$ref": "#/definitions/configs/ObjectTrackerConfig" },
+        { "$ref": "#/definitions/configs/CounterConfig" },
+        { "$ref": "#/definitions/configs/PythonFunctionConfig" },
+        { "$ref": "#/definitions/configs/FilterConfig" },
+        { "$ref": "#/definitions/configs/ParamConfig" },
+        { "$ref": "#/definitions/configs/CppFunctionConfig" },
+        { "$ref": "#/definitions/configs/StreamViewerConfig" },
+        { "$ref": "#/definitions/configs/VideoWriterConfig" },
+        { "$ref": "#/definitions/configs/TriggerWebhookConfig" }
+      ]
+    },
+    "configs": {
+      "CameraConfig": {
+        "type": "object",
+        "required": ["source_type"],
+        "properties": {
+          "source_type": { "type": "string", "enum": ["rtsp", "usb"] },
+          "url": { "type": "string", "description": "RTSP URL" },
+          "device_index": { "type": "integer", "default": 0 },
+          "fps_limit": { "type": "integer", "default": 30 },
+          "reconnect_delay_s": { "type": "number", "default": 3.0 }
+        }
+      },
+      "VideoFileConfig": {
+        "type": "object",
+        "required": ["file_path"],
+        "properties": {
+          "file_path": { "type": "string" },
+          "loop": { "type": "boolean", "default": false },
+          "fps_limit": { "type": "integer", "default": 0, "description": "0 = original FPS" }
+        }
+      },
+      "ImageDirectoryConfig": {
+        "type": "object",
+        "required": ["directory_path"],
+        "properties": {
+          "directory_path": { "type": "string" },
+          "pattern": { "type": "string", "default": "*.jpg" },
+          "delay_ms": { "type": "integer", "default": 100 }
+        }
+      },
+      "PreprocessConfig": {
+        "type": "object",
+        "properties": {
+          "resize": {
+            "type": "object",
+            "properties": {
+              "width": { "type": "integer" },
+              "height": { "type": "integer" },
+              "keep_aspect": { "type": "boolean", "default": true }
+            }
+          },
+          "crop": {
+            "type": "object",
+            "properties": {
+              "x": { "type": "integer" },
+              "y": { "type": "integer" },
+              "width": { "type": "integer" },
+              "height": { "type": "integer" }
+            }
+          },
+          "normalize": {
+            "type": "string",
+            "enum": ["none", "0_1", "imagenet", "custom"],
+            "default": "none"
+          },
+          "mean": { "type": "array", "items": { "type": "number" }, "maxItems": 3 },
+          "std": { "type": "array", "items": { "type": "number" }, "maxItems": 3 }
+        }
+      },
+      "ModelInferenceConfig": {
+        "type": "object",
+        "required": ["model_id"],
+        "properties": {
+          "model_id": { "type": "string", "format": "uuid" },
+          "device": { "type": "string", "enum": ["cpu", "cuda"], "default": "cpu" },
+          "batch_size": { "type": "integer", "default": 1 },
+          "conf_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.5 }
+        }
+      },
+      "PostprocessNMSConfig": {
+        "type": "object",
+        "properties": {
+          "iou_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.45 },
+          "conf_threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.25 },
+          "max_detections": { "type": "integer", "default": 300 }
+        }
+      },
+      "DrawROIConfig": {
+        "type": "object",
+        "required": ["zone_id", "polygon"],
+        "properties": {
+          "zone_id": { "type": "string" },
+          "polygon": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 3,
+            "description": "Points as [[x_pct, y_pct], ...] — percentage of frame dimensions"
+          },
+          "color": { "type": "array", "items": { "type": "integer" }, "default": [0, 255, 0] },
+          "draw_on_frame": { "type": "boolean", "default": true },
+          "filter_outside": { "type": "boolean", "default": true }
+        }
+      },
+      "DrawLineConfig": {
+        "type": "object",
+        "required": ["line_id", "line"],
+        "properties": {
+          "line_id": { "type": "string" },
+          "line": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "minItems": 2,
+            "maxItems": 2,
+            "description": "Two points [[x0_pct, y0_pct], [x1_pct, y1_pct]]"
+          },
+          "direction": { "type": "string", "enum": ["both", "positive", "negative"], "default": "both" },
+          "color": { "type": "array", "items": { "type": "integer" }, "default": [0, 0, 255] }
+        }
+      },
+      "ObjectTrackerConfig": {
+        "type": "object",
+        "properties": {
+          "algorithm": { "type": "string", "enum": ["deepsort", "bytetrack"], "default": "bytetrack" },
+          "max_age": { "type": "integer", "default": 30 },
+          "min_hits": { "type": "integer", "default": 3 },
+          "iou_threshold": { "type": "number", "default": 0.3 }
+        }
+      },
+      "CounterConfig": {
+        "type": "object",
+        "required": ["trigger_type", "trigger_id"],
+        "properties": {
+          "trigger_type": { "type": "string", "enum": ["line_cross", "zone_enter", "zone_exit"] },
+          "trigger_id": { "type": "string" },
+          "count_classes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Empty = count all classes"
+          },
+          "reset_on_start": { "type": "boolean", "default": true }
+        }
+      },
+      "PythonFunctionConfig": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Python function: def process(frame, detections, params): ... return frame, detections"
+          }
+        }
+      },
+      "FilterConfig": {
+        "type": "object",
+        "properties": {
+          "allowed_classes": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Empty = allow all"
+          },
+          "min_confidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0 },
+          "min_area_pct": { "type": "number", "minimum": 0, "maximum": 100, "default": 0 }
+        }
+      },
+      "ParamConfig": {
+        "type": "object",
+        "properties": {
+          "params": {
+            "type": "object",
+            "description": "Key-value pairs injected into ctx.metadata['params']"
+          }
+        }
+      },
+      "CppFunctionConfig": {
+        "type": "object",
+        "required": ["source_code"],
+        "properties": {
+          "source_code": { "type": "string" },
+          "compiled_so_hash": { "type": "string", "description": "SHA256 of source — links to cached .so" },
+          "compile_flags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": ["-O2", "-march=native"]
+          },
+          "extra_libs": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Additional cmake find_package names e.g. ['TBB', 'CUDA']"
+          }
+        }
+      },
+      "StreamViewerConfig": {
+        "type": "object",
+        "properties": {
+          "jpeg_quality": { "type": "integer", "minimum": 1, "maximum": 100, "default": 80 },
+          "max_fps": { "type": "integer", "default": 30 }
+        }
+      },
+      "VideoWriterConfig": {
+        "type": "object",
+        "required": ["output_path"],
+        "properties": {
+          "output_path": { "type": "string" },
+          "codec": { "type": "string", "default": "mp4v" },
+          "fps": { "type": "number", "default": 30 }
+        }
+      },
+      "TriggerWebhookConfig": {
+        "type": "object",
+        "required": ["protocol", "trigger_on"],
+        "properties": {
+          "protocol": { "type": "string", "enum": ["http", "mqtt"] },
+          "url": { "type": "string", "description": "HTTP POST URL" },
+          "mqtt_broker": { "type": "string" },
+          "mqtt_topic": { "type": "string" },
+          "trigger_on": {
+            "type": "string",
+            "enum": ["count_change", "detection", "zone_enter", "line_cross"]
+          },
+          "rate_limit_s": { "type": "number", "default": 2.0 },
+          "payload_template": {
+            "type": "string",
+            "description": "JSON template. Use {count}, {class}, {timestamp} placeholders."
+          }
+        }
+      }
+    }
+  }
+}

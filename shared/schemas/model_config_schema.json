@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "title": "ModelConfig",
+  "description": "Metadata file (config.json) required with every model upload to CV-FLOW Model Hub",
+  "type": "object",
+  "required": ["name", "version", "task", "format", "input_shape", "output_shapes"],
+  "properties": {
+    "model_id": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Auto-assigned by server on upload. Omit when creating config.json manually."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[a-zA-Z0-9_-]+$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version, e.g. 1.0.0"
+    },
+    "task": {
+      "type": "string",
+      "enum": ["detection", "classification", "segmentation", "pose"],
+      "description": "Primary task this model performs"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["onnx"],
+      "description": "Only ONNX is supported"
+    },
+    "input_shape": {
+      "type": "array",
+      "items": { "type": "integer" },
+      "minItems": 3,
+      "maxItems": 4,
+      "description": "NCHW or CHW, e.g. [1, 3, 640, 640]"
+    },
+    "input_dtype": {
+      "type": "string",
+      "enum": ["float32", "float16", "uint8"],
+      "default": "float32"
+    },
+    "input_name": {
+      "type": "string",
+      "default": "images",
+      "description": "ONNX input tensor name"
+    },
+    "input_normalization": {
+      "type": "object",
+      "properties": {
+        "mean": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "Per-channel mean [R, G, B] or [B, G, R]"
+        },
+        "std": {
+          "type": "array",
+          "items": { "type": "number" },
+          "description": "Per-channel std"
+        },
+        "channel_order": {
+          "type": "string",
+          "enum": ["BGR", "RGB"],
+          "default": "BGR"
+        }
+      }
+    },
+    "output_shapes": {
+      "type": "object",
+      "description": "Map of output tensor name → shape, e.g. {\"output0\": [1, 84, 8400]}",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "integer" }
+      }
+    },
+    "class_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ordered list of class names matching model output class indices"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 512
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,48 @@
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Build artifacts
+*.so
+*.dll
+*.pyd
+build/
+*.o
+*.a
+
+# Database
+*.db
+*.sqlite3
+
+# Storage (models, compiled nodes)
+backend/storage/
+engine/storage/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
