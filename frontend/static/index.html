@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CV-FLOW</title>
+
+<!-- Polyfill import maps for all browsers -->
+<script async src="https://ga.jspm.io/npm:es-module-shims@1.10.1/dist/es-module-shims.js"></script>
+
+<!-- ReactFlow v11 styles -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reactflow@11/dist/style.css" />
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+body { background: #0d1117; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+
+/* ReactFlow dark theme */
+.react-flow__background { background: #0d1117 !important; }
+.react-flow__pane { cursor: default; }
+.react-flow__controls { box-shadow: none !important; }
+.react-flow__controls-button {
+  background: #161b22 !important; border: 1px solid #30363d !important;
+  fill: #8b949e !important; color: #8b949e !important;
+}
+.react-flow__controls-button:hover { background: #21262d !important; fill: #c9d1d9 !important; }
+.react-flow__minimap { border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
+.react-flow__minimap-mask { fill: rgba(0,0,0,.6); }
+.react-flow__edge-path { stroke: #58a6ff; stroke-width: 2; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: #a5c8ff; }
+.react-flow__connection-path { stroke: #58a6ff; stroke-width: 2; stroke-dasharray: 5 5; }
+.react-flow__handle { border-radius: 50% !important; }
+.react-flow__node.selected > div { outline: 2px solid #58a6ff !important; outline-offset: 2px; }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:.4} }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "react":            "https://esm.sh/react@18",
+    "react-dom":        "https://esm.sh/react-dom@18",
+    "react-dom/client": "https://esm.sh/react-dom@18/client",
+    "reactflow":        "https://esm.sh/reactflow@11?external=react,react-dom"
+  }
+}
+</script>
+</head>
+<body>
+<div id="root">
+  <div id="loading" style="display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:14px;color:#58a6ff">
+    <div style="font-size:28px;font-weight:700;letter-spacing:2px">CV-FLOW</div>
+    <div style="font-size:13px;color:#8b949e">Loading interface...</div>
+  </div>
+</div>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

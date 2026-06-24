@@ -1,18 +1,30 @@
 import json
 import numpy as np
-import onnxruntime as ort
 from pathlib import Path
 from engine.nodes.base import BaseNode
 from engine.core.frame_context import FrameContext
 from engine.core.node_registry import register
 
+try:
+    import onnxruntime as ort
+    _ORT_AVAILABLE = True
+except ImportError:
+    _ORT_AVAILABLE = False
+
 
 @register("model_inference")
 class ModelInferenceNode(BaseNode):
-    _session: ort.InferenceSession
-    _model_config: dict
+    _session = None
+    _model_config: dict = {}
 
     def initialize(self):
+        if not _ORT_AVAILABLE:
+            import logging
+            logging.getLogger(__name__).warning(
+                "onnxruntime not installed — ModelInferenceNode will be a no-op. "
+                "Install with: pip install onnxruntime"
+            )
+            return
         self._load_model()
 
     def _load_model(self):
@@ -36,11 +48,12 @@ class ModelInferenceNode(BaseNode):
         self._load_model()
 
     def process(self, ctx: FrameContext) -> FrameContext:
-        # Use preprocessed tensor if available, otherwise auto-preprocess
+        if self._session is None:
+            return ctx
+
         tensor = ctx.metadata.get("preprocessed_tensor")
         if tensor is None:
             import cv2
-            h, w = ctx.frame.shape[:2]
             input_shape = self._model_config.get("input_shape", [1, 3, 640, 640])
             th, tw = input_shape[-2], input_shape[-1]
             resized = cv2.resize(ctx.frame, (tw, th))
