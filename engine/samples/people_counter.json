@@ -1,0 +1,102 @@
+{
+  "version": "1.0",
+  "name": "People Counter — RTSP with Line Crossing",
+  "description": "Count people crossing a virtual line from an RTSP stream. Configure rtsp_url, model_id, and line_start/end to match your setup.",
+  "nodes": [
+    {
+      "id": "cam",
+      "type": "rtsp_stream",
+      "config": {
+        "url": "rtsp://REPLACE_WITH_RTSP_URL",
+        "reconnect_delay_s": 3.0
+      },
+      "position": { "x": 50, "y": 200 }
+    },
+    {
+      "id": "fps_cap",
+      "type": "fps_limiter",
+      "config": { "target_fps": 10.0 },
+      "position": { "x": 300, "y": 200 }
+    },
+    {
+      "id": "pre",
+      "type": "preprocess",
+      "config": { "width": 640, "height": 640, "normalize": "imagenet" },
+      "position": { "x": 550, "y": 200 }
+    },
+    {
+      "id": "inf",
+      "type": "model_inference",
+      "config": {
+        "model_id": "REPLACE_WITH_MODEL_ID",
+        "device": "cpu"
+      },
+      "scaling": { "min_workers": 1, "max_workers": 3, "scale_up_buffer": 5 },
+      "position": { "x": 800, "y": 200 }
+    },
+    {
+      "id": "nms",
+      "type": "nms",
+      "config": {
+        "confidence_threshold": 0.45,
+        "iou_threshold": 0.45,
+        "format": "yolov8",
+        "filter_classes": ["person"]
+      },
+      "position": { "x": 1050, "y": 200 }
+    },
+    {
+      "id": "tracker",
+      "type": "object_tracker",
+      "config": { "tracker": "bytetrack" },
+      "position": { "x": 1300, "y": 200 }
+    },
+    {
+      "id": "line",
+      "type": "draw_line",
+      "config": {
+        "start_x": 30.0, "start_y": 50.0,
+        "end_x":   70.0, "end_y":   50.0,
+        "direction": "up"
+      },
+      "position": { "x": 1550, "y": 200 }
+    },
+    {
+      "id": "counter",
+      "type": "counter",
+      "config": { "mode": "line_cross", "reset_on_start": true },
+      "position": { "x": 1800, "y": 200 }
+    },
+    {
+      "id": "out",
+      "type": "stream_viewer",
+      "config": {},
+      "position": { "x": 2050, "y": 200 }
+    },
+    {
+      "id": "mqtt",
+      "type": "mqtt_publish",
+      "config": {
+        "broker_host": "localhost",
+        "broker_port": 1883,
+        "topic": "cvflow/people_count",
+        "trigger": "count_change",
+        "cooldown_s": 1.0
+      },
+      "position": { "x": 2050, "y": 400 }
+    }
+  ],
+  "edges": [
+    { "source": "cam",     "sourceHandle": "out",   "target": "fps_cap","targetHandle": "in"   },
+    { "source": "fps_cap", "sourceHandle": "frame",  "target": "pre",   "targetHandle": "in"   },
+    { "source": "pre",     "sourceHandle": "out",   "target": "inf",   "targetHandle": "in"   },
+    { "source": "inf",     "sourceHandle": "out",   "target": "nms",   "targetHandle": "in"   },
+    { "source": "inf",     "sourceHandle": "raw",   "target": "nms",   "targetHandle": "raw"  },
+    { "source": "nms",     "sourceHandle": "frame", "target": "tracker","targetHandle": "in"   },
+    { "source": "nms",     "sourceHandle": "dets",  "target": "tracker","targetHandle": "dets" },
+    { "source": "tracker", "sourceHandle": "out",   "target": "line",  "targetHandle": "in"   },
+    { "source": "line",    "sourceHandle": "out",   "target": "counter","targetHandle": "in"   },
+    { "source": "counter", "sourceHandle": "out",   "target": "out",   "targetHandle": "in"   },
+    { "source": "counter", "sourceHandle": "out",   "target": "mqtt",  "targetHandle": "in"   }
+  ]
+}

@@ -1,9 +1,27 @@
+import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# Make the project root importable so `import engine.*` works when the server
+# is launched from the backend/ subdirectory (e.g. `uvicorn app.main:app`).
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(_PROJECT_ROOT))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.responses import Response
+
+
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        resp: Response = await super().get_response(path, scope)
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+        return resp
 
 from app.config import settings
 from app.database import create_tables
@@ -52,4 +70,4 @@ async def serve_ui():
 
 
 if _STATIC_DIR.exists():
-    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")
+    app.mount("/", NoCacheStaticFiles(directory=str(_STATIC_DIR), html=True), name="static")

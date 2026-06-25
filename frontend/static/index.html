@@ -42,7 +42,19 @@ body { background: #0d1117; font-family: -apple-system, BlinkMacSystemFont, 'Seg
     "react":            "https://esm.sh/react@18",
     "react-dom":        "https://esm.sh/react-dom@18",
     "react-dom/client": "https://esm.sh/react-dom@18/client",
-    "reactflow":        "https://esm.sh/reactflow@11?external=react,react-dom"
+    "reactflow":        "https://esm.sh/reactflow@11?external=react,react-dom",
+
+    "@lezer/common":              "https://esm.sh/@lezer/common@1",
+    "@lezer/lr":                  "https://esm.sh/@lezer/lr@1?external=@lezer/common",
+    "@lezer/highlight":           "https://esm.sh/@lezer/highlight@1?external=@lezer/common",
+    "@lezer/python":              "https://esm.sh/@lezer/python@1?external=@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/state":          "https://esm.sh/@codemirror/state@6",
+    "@codemirror/view":           "https://esm.sh/@codemirror/view@6?external=@codemirror/state,@lezer/common,@lezer/highlight",
+    "@codemirror/language":       "https://esm.sh/@codemirror/language@6?external=@codemirror/state,@codemirror/view,@lezer/common,@lezer/highlight,@lezer/lr",
+    "@codemirror/commands":       "https://esm.sh/@codemirror/commands@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/autocomplete":   "https://esm.sh/@codemirror/autocomplete@6?external=@codemirror/state,@codemirror/view,@codemirror/language",
+    "@codemirror/lang-python":    "https://esm.sh/@codemirror/lang-python@6?external=@codemirror/state,@codemirror/view,@codemirror/language,@lezer/common,@lezer/highlight,@lezer/python",
+    "@codemirror/theme-one-dark": "https://esm.sh/@codemirror/theme-one-dark@6?external=@codemirror/state,@codemirror/view,@lezer/highlight"
   }
 }
 </script>
@@ -54,6 +66,6 @@ body { background: #0d1117; font-family: -apple-system, BlinkMacSystemFont, 'Seg
     <div style="font-size:13px;color:#8b949e">Loading interface...</div>
   </div>
 </div>
-<script type="module" src="./app.js"></script>
+<script type="module" src="./app.js?v=33"></script>
 </body>
 </html>

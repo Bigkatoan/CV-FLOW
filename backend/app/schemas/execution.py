@@ -6,6 +6,7 @@ from pydantic import BaseModel
 class ExecutionStartRequest(BaseModel):
     pipeline_id: str
     params_override: dict[str, Any] | None = None
+    mode: str = "sequential"  # "sequential" | "multiprocess"
 
 
 class ExecutionStartResponse(BaseModel):
