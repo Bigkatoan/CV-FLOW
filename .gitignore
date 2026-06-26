@@ -25,9 +25,10 @@ build/
 *.db
 *.sqlite3
 
-# Storage (models, compiled nodes)
+# Storage (models, runtime data — face embeddings, vector dbs, logged images)
 backend/storage/
 engine/storage/
+storage/
 
 # Environment
 .env

@@ -17,5 +17,10 @@ async def get_db():
 
 
 async def create_tables():
+    # Import all model modules so Base.metadata is fully populated before create_all.
+    import app.models.model_registry  # noqa: F401
+    import app.models.datahub         # noqa: F401
+    import app.models.compiled_node   # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+

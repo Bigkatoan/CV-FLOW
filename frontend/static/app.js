@@ -5,8 +5,9 @@ import {
   addEdge, useNodesState, useEdgesState, useReactFlow, ReactFlowProvider,
 } from "reactflow";
 import htm from "https://esm.sh/htm@3";
-import { nodeTypes, NODE_META, GROUP_COLOR, NODE_PORTS, makeNode, registerNodeType } from "./nodes.js?v=30";
-import { SAMPLES } from "./samples.js?v=30";
+import { DataHubPanel } from "./datahub.js?v=35";
+import { nodeTypes, NODE_META, GROUP_COLOR, NODE_PORTS, makeNode, registerNodeType } from "./nodes.js?v=35";
+import { SAMPLES } from "./samples.js?v=32";
 
 const html = htm.bind(createElement);
 
@@ -172,11 +173,12 @@ void cv_flow_teardown() {
 const DEFAULT_CONFIG = {
   python_node: { mode: "loop", active_key: "active", code: DEFAULT_LOOP_CODE },
   cpp_node:    { mode: "loop", source_code: DEFAULT_CPP_CODE, compile_status: "uncompiled" },
+  model_node:  { model_id: "" },
 };
 
 // ── BASE PALETTE GROUPS ───────────────────────────────────────────────────────
 const BASE_GROUPS = [
-  { label: "Core", types: ["python_node", "cpp_node"] },
+  { label: "Core", types: ["python_node", "cpp_node", "model_node"] },
 ];
 
 // ── FORM FIELD STYLES ─────────────────────────────────────────────────────────
@@ -530,7 +532,7 @@ function PortEditor({ node, onUpdate }) {
             placeholder="label" />
           ${ports[side].length > 1 && html`
             <button onClick=${() => removePort(side, i)}
-              style=${{ background: "none", border: "none", color: "#f85149", cursor: "pointer", fontSize: 13, padding: "0 4px" }}>×</button>`}
+              style=${{ background: "none", border: "none", color: "#f85149", cursor: "pointer", fontSize: 13, padding: "0 4px" }}>Ã—</button>`}
         </div>`)}
     </div>`;
 
@@ -634,7 +636,7 @@ function PythonFunctionFields({ node, cfg, onUpdate }) {
           onBlur=${e => renameOutput(i, e.target.value)}
           onKeyDown=${e => e.key === "Enter" && renameOutput(i, e.target.value)}
           style=${{ ...inp, flex: 1, fontSize: 11, fontFamily: "monospace" }} />
-        ${smallBtn("×", () => removeOutput(i), "#f85149")}
+        ${smallBtn("Ã—", () => removeOutput(i), "#f85149")}
       </div>`)}
     <div style=${{ marginBottom: 10 }}>
       ${smallBtn("+ Add Output", addOutput, "#3fb950")}
@@ -696,7 +698,7 @@ function PipelineOutputPortEditor({ node, cfg, onUpdate }) {
             onKeyDown=${e => e.key === "Enter" && (rename(i, e.target.value), e.target.blur())}
             style=${{ ...inp, flex: 1, fontSize: 11 }}
             placeholder="Port label" />
-          ${inputs.length > 1 && smallBtn("×", () => remove(i), "#f85149")}
+          ${inputs.length > 1 && smallBtn("Ã—", () => remove(i), "#f85149")}
         </div>`)}
       <div style=${{ marginTop: 4 }}>${smallBtn("+ Add Input", add, "#3fb950")}</div>
       <div style=${{ fontSize: 10, color: "#555d68", marginTop: 5 }}>
@@ -837,8 +839,116 @@ function PythonEditor({ value, onChange, onBlur, minHeight = 260 }) {
   return html`<div ref=${containerRef} style=${{ border: "1px solid #30363d", borderRadius: 6, overflow: "hidden" }} />`;
 }
 
+// ── NODE STATS DASHBOARD ──────────────────────────────────────────────────────
+function NodeStatsDashboard({ stats, sysInfo, nodeType }) {
+  const row = (label, value, color) => html`
+    <div style=${{ display: "flex", justifyContent: "space-between", padding: "3px 0" }}>
+      <span style=${{ fontSize: 11, color: "#8b949e" }}>${label}</span>
+      <span style=${{ fontSize: 11, color: color ?? "#c9d1d9", fontVariantNumeric: "tabular-nums", fontFamily: "monospace" }}>${value}</span>
+    </div>`;
+
+  const bar = (pct, color) => html`
+    <div style=${{ height: 4, borderRadius: 2, background: "#21262d", overflow: "hidden", marginTop: 2, marginBottom: 4 }}>
+      <div style=${{ height: "100%", width: Math.min(100, pct) + "%", background: color, borderRadius: 2 }} />
+    </div>`;
+
+  const ms = stats?.avg_ms ?? 0;
+  const fpsColor = (stats?.fps ?? 0) > 20 ? "#3fb950" : (stats?.fps ?? 0) > 5 ? "#e3b341" : "#f85149";
+  const msColor  = ms < 33 ? "#3fb950" : ms < 100 ? "#e3b341" : "#f85149";
+
+  const onGpu = nodeType === "model_node";
+  const deviceLabel = onGpu ? "Model (ONNX)" : nodeType === "cpp_node" ? "C++ / CPU" : "Python / CPU";
+  const deviceIcon  = onGpu ? "🧠" : nodeType === "cpp_node" ? "⚙️" : "🐍";
+
+  return html`
+    <div style=${{ marginTop: 14, borderTop: "1px solid #30363d", paddingTop: 12 }}>
+      <div style=${{ fontSize: 10, fontWeight: 700, letterSpacing: 0.8, color: "#58a6ff",
+                      textTransform: "uppercase", marginBottom: 8 }}>
+        ⚡ Live Performance
+      </div>
+
+      ${stats ? html`
+        <div style=${{ background: "#0d1117", borderRadius: 6, padding: "8px 12px", marginBottom: 10,
+                        border: "1px solid #21262d" }}>
+          ${row("FPS", (stats.fps ?? 0).toFixed(1), fpsColor)}
+          ${row("Avg latency", ms.toFixed(0) + " ms", msColor)}
+          ${row("P95 latency", (stats.p95_ms ?? 0).toFixed(0) + " ms", "#8b949e")}
+          ${row("Frames", (stats.frames ?? 0).toLocaleString(), "#c9d1d9")}
+          ${(stats.errors ?? 0) > 0 && row("Errors", stats.errors, "#f85149")}
+        </div>
+      ` : html`
+        <div style=${{ fontSize: 11, color: "#555d68", marginBottom: 10 }}>
+          No stats yet — pipeline is starting…
+        </div>
+      `}
+
+      <div style=${{ fontSize: 10, color: "#8b949e", marginBottom: 4 }}>
+        <span style=${{ marginRight: 6 }}>${deviceIcon}</span>
+        <span style=${{ color: "#c9d1d9" }}>Device: </span>${deviceLabel}
+      </div>
+
+      ${sysInfo && html`
+        <div style=${{ background: "#0d1117", borderRadius: 6, padding: "8px 12px",
+                        border: "1px solid #21262d" }}>
+          <div style=${{ fontSize: 10, fontWeight: 600, color: "#8b949e", marginBottom: 6 }}>
+            System Resources
+          </div>
+          <div style=${{ fontSize: 10, color: "#8b949e", marginBottom: 2 }}>
+            CPU ${sysInfo.cpu_percent}% · ${sysInfo.cpu_count} cores
+          </div>
+          ${bar(sysInfo.cpu_percent, "#58a6ff")}
+          <div style=${{ fontSize: 10, color: "#8b949e", marginBottom: 2 }}>
+            RAM ${sysInfo.ram_used_gb?.toFixed(1)} / ${sysInfo.ram_total_gb?.toFixed(1)} GB
+            <span style=${{ float: "right" }}>${sysInfo.ram_percent}%</span>
+          </div>
+          ${bar(sysInfo.ram_percent, "#3fb950")}
+          ${(sysInfo.gpu ?? []).map((g, i) => html`
+            <div key=${i}>
+              <div style=${{ fontSize: 10, color: "#8b949e", marginBottom: 2 }}>
+                GPU ${g.name?.split(" ").slice(-2).join(" ")}:
+                VRAM ${(g.vram_used_mb / 1024).toFixed(1)} / ${(g.vram_total_mb / 1024).toFixed(1)} GB
+                <span style=${{ float: "right" }}>${g.vram_percent}%</span>
+              </div>
+              ${bar(g.vram_percent, "#e3b341")}
+            </div>
+          `)}
+        </div>
+      `}
+    </div>`;
+}
+
+// ── SESSIONS BAR ──────────────────────────────────────────────────────────────
+function SessionsBar({ sessions, stats, onStop, primarySid }) {
+  if (!sessions.length) return null;
+  return html`
+    <div style=${{ display: "flex", alignItems: "center", gap: 6, padding: "3px 12px",
+                   background: "#0d1117", borderBottom: "1px solid #21262d",
+                   flexShrink: 0, flexWrap: "wrap", minHeight: 28 }}>
+      <span style=${{ fontSize: 10, color: "#555d68", fontWeight: 700, letterSpacing: 1, textTransform: "uppercase", marginRight: 2 }}>Running</span>
+      ${sessions.map(s => {
+        const nodeStats = stats?.[s.id] ?? {};
+        const fps = Object.values(nodeStats).length
+          ? Object.values(nodeStats).reduce((a, n) => a + (n.fps || 0), 0) / Object.values(nodeStats).length
+          : 0;
+        const isPrimary = s.id === primarySid;
+        return html`
+          <div key=${s.id} style=${{ display: "flex", alignItems: "center", gap: 5,
+                                     background: isPrimary ? "#1a3d2e" : "#161b22",
+                                     border: `1px solid ${isPrimary ? "#3fb950" : "#30363d"}`,
+                                     borderRadius: 6, padding: "2px 8px", fontSize: 11 }}>
+            <span style=${{ width: 6, height: 6, borderRadius: "50%", background: "#3fb950", flexShrink: 0,
+                             animation: "blink 1.8s infinite" }}></span>
+            <span style=${{ color: "#c9d1d9", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>${s.name}</span>
+            ${fps > 0 && html`<span style=${{ color: "#58a6ff", fontWeight: 600 }}>${fps.toFixed(1)} fps</span>`}
+            <button onClick=${() => onStop(s.id)}
+              style=${{ background: "none", border: "none", color: "#f85149", cursor: "pointer", fontSize: 13, padding: "0 0 0 2px", lineHeight: 1 }}>✕</button>
+          </div>`;
+      })}
+    </div>`;
+}
+
 // ── PROPERTIES PANEL ──────────────────────────────────────────────────────────
-function PropertiesPanel({ node, onUpdate, onDuplicate, sessionId, running, nodeDataMap, nodeVizMap, onEditCode, onSaveNode }) {
+function PropertiesPanel({ node, onUpdate, onDuplicate, sessionId, running, nodeDataMap, nodeVizMap, onEditCode, onSaveNode, nodeStats, sysInfo }) {
   if (!node) return html`
     <div style=${{ padding: 16, color: "#8b949e", fontSize: 12, textAlign: "center", paddingTop: 40 }}>
       <div style=${{ fontSize: 24, marginBottom: 8 }}>◻</div>
@@ -1090,7 +1200,7 @@ function PropertiesPanel({ node, onUpdate, onDuplicate, sessionId, running, node
     case "cpp_node":    fields = renderCppFields();    break;
     default:
       if (node.type.startsWith("tmpl_")) { fields = renderTemplateFields(); break; }
-      // Unknown node type — show raw config
+      // Generic fallback — show raw config JSON editor
       fields = html`
         <${PortsInfo} node=${node} />
         <${Field} label="Config (JSON)">
@@ -1101,582 +1211,6 @@ function PropertiesPanel({ node, onUpdate, onDuplicate, sessionId, running, node
         <//>`;
   }
 
-  if (false) { // legacy dead code — all old node types removed
-    switch (node.type) {
-    case "usb_camera": fields = html`
-      <${Field} label="Device Index (0 = default camera)"><input type="number" style=${inp} value=${cfg.device_index ?? 0} onChange=${e => set("device_index", +e.target.value)} /><//>
-      <${Field} label="FPS Limit (0 = unlimited)"><input type="number" style=${inp} value=${cfg.fps_limit ?? 30} onChange=${e => set("fps_limit", +e.target.value)} /><//>
-      <${Field} label="Width (0 = camera default)"><input type="number" style=${inp} value=${cfg.width ?? 0} onChange=${e => set("width", +e.target.value)} /><//>
-      <${Field} label="Height (0 = camera default)"><input type="number" style=${inp} value=${cfg.height ?? 0} onChange=${e => set("height", +e.target.value)} /><//>
-      `; break;
-
-    case "rtsp_stream": fields = html`
-      <${Field} label="RTSP URL"><input style=${inp} value=${cfg.url ?? ""} onChange=${e => set("url", e.target.value)} placeholder="rtsp://192.168.1.x:554/stream" /><//>
-      <${Field} label="FPS Limit (0 = stream rate)"><input type="number" style=${inp} value=${cfg.fps_limit ?? 30} onChange=${e => set("fps_limit", +e.target.value)} /><//>
-      <${Field} label="Reconnect Delay (s)"><input type="number" style=${inp} value=${cfg.reconnect_delay_s ?? 3} onChange=${e => set("reconnect_delay_s", +e.target.value)} /><//>
-      `; break;
-
-    case "video_file": fields = html`
-      <${Field} label="File Path"><input style=${inp} value=${cfg.file_path ?? ""} onChange=${e => set("file_path", e.target.value)} placeholder="C:/video.mp4" /><//>
-      <${Field} label="Loop">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${!!cfg.loop} onChange=${e => set("loop", e.target.checked)} />
-          <span style=${{ color: "#c9d1d9", fontSize: 12 }}>Loop video</span>
-        </label>
-      <//>
-      <${Field} label="FPS Limit (0 = native)"><input type="number" style=${inp} value=${cfg.fps_limit ?? 0} onChange=${e => set("fps_limit", +e.target.value)} /><//>
-      `; break;
-
-    case "image_directory": fields = html`
-      <${Field} label="Directory Path"><input style=${inp} value=${cfg.directory_path ?? ""} onChange=${e => set("directory_path", e.target.value)} placeholder="C:/images" /><//>
-      <${Field} label="File Pattern"><input style=${inp} value=${cfg.pattern ?? "*.jpg"} onChange=${e => set("pattern", e.target.value)} /><//>
-      <${Field} label="Delay Between Frames (ms)"><input type="number" style=${inp} value=${cfg.delay_ms ?? 100} onChange=${e => set("delay_ms", +e.target.value)} /><//>
-      `; break;
-
-    case "preprocess": fields = html`
-      <${Field} label="Normalize">
-        <select style=${inp} value=${cfg.normalize ?? "none"} onChange=${e => set("normalize", e.target.value)}>
-          <option value="none">None</option><option value="imagenet">ImageNet (÷255, mean/std)</option><option value="min_max">Min-Max [0,1]</option>
-        </select>
-      <//>
-      <${Field} label="Resize Width (0 = no resize)"><input type="number" style=${inp} value=${cfg.resize_w ?? 0} onChange=${e => set("resize_w", +e.target.value)} /><//>
-      <${Field} label="Resize Height (0 = no resize)"><input type="number" style=${inp} value=${cfg.resize_h ?? 0} onChange=${e => set("resize_h", +e.target.value)} /><//>
-      `; break;
-
-    case "model_inference": fields = html`
-      <${Field} label="Model ID">
-        <input style=${{ ...inp, fontFamily: "monospace", fontSize: 11 }} value=${cfg.model_id ?? ""}
-          onChange=${e => set("model_id", e.target.value)} placeholder="UUID — copy from Models panel" />
-      <//>
-      ${!cfg.model_id && html`<div style=${{ fontSize: 10, color: "#f85149", marginBottom: 8 }}>⚠ No model selected — open Models panel to upload</div>`}
-      <${Field} label="Device">
-        <select style=${inp} value=${cfg.device ?? "cpu"} onChange=${e => set("device", e.target.value)}>
-          <option value="cpu">CPU</option><option value="cuda">CUDA (GPU)</option>
-        </select>
-      <//>
-      <${Field} label=${"Confidence Threshold: " + (cfg.conf_threshold ?? 0.5)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="1" step="0.05"
-          value=${cfg.conf_threshold ?? 0.5} onChange=${e => set("conf_threshold", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "nms": fields = html`
-      <${Field} label=${"IoU Threshold: " + (cfg.iou_threshold ?? 0.45)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="1" step="0.05"
-          value=${cfg.iou_threshold ?? 0.45} onChange=${e => set("iou_threshold", +e.target.value)} />
-      <//>
-      <${Field} label=${"Confidence Threshold: " + (cfg.conf_threshold ?? 0.25)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="1" step="0.05"
-          value=${cfg.conf_threshold ?? 0.25} onChange=${e => set("conf_threshold", +e.target.value)} />
-      <//>
-      <${Field} label="Max Detections"><input type="number" style=${inp} value=${cfg.max_detections ?? 300} onChange=${e => set("max_detections", +e.target.value)} /><//>
-      `; break;
-
-    case "draw_bbox": fields = html`
-      <${Field} label="Thickness">
-        <input type="number" style=${inp} min="1" max="8" value=${cfg.thickness ?? 2}
-          onChange=${e => set("thickness", +e.target.value)} />
-      <//>
-      <${Field} label=${"Font Scale: " + (cfg.font_scale ?? 0.45)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0.2" max="1.2" step="0.05"
-          value=${cfg.font_scale ?? 0.45} onChange=${e => set("font_scale", +e.target.value)} />
-      <//>
-      <${Field} label="Show Label">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.show_label !== false}
-            onChange=${e => set("show_label", e.target.checked)} />
-          <span style=${{ fontSize: 12, color: "#c9d1d9" }}>Class name</span>
-        </label>
-      <//>
-      <${Field} label="Show Confidence">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.show_confidence !== false}
-            onChange=${e => set("show_confidence", e.target.checked)} />
-          <span style=${{ fontSize: 12, color: "#c9d1d9" }}>Score</span>
-        </label>
-      <//>
-      <${Field} label="Show Track ID">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.show_track_id !== false}
-            onChange=${e => set("show_track_id", e.target.checked)} />
-          <span style=${{ fontSize: 12, color: "#c9d1d9" }}>Track #ID (if tracked)</span>
-        </label>
-      <//>
-      `; break;
-
-    case "crop_bbox": fields = html`
-      <${Field} label="Output Size (px)">
-        <input type="number" style=${inp} min="8" max="1024" step="8"
-          value=${cfg.image_size ?? 112} onChange=${e => set("image_size", +e.target.value)} />
-        <div style=${{ fontSize: 10, color: "#8b949e", marginTop: 3 }}>Each crop is resized to N×N pixels</div>
-      <//>
-      <${Field} label=${"Padding: " + (cfg.padding ?? 0)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="0.5" step="0.05"
-          value=${cfg.padding ?? 0} onChange=${e => set("padding", +e.target.value)} />
-        <div style=${{ fontSize: 10, color: "#8b949e", marginTop: 3 }}>Expand each bbox by this fraction before cropping</div>
-      <//>
-      `; break;
-
-    case "blur": fields = html`
-      <${Field} label="Blur Type">
-        <select style=${inp} value=${cfg.type ?? "gaussian"} onChange=${e => set("type", e.target.value)}>
-          <option value="gaussian">Gaussian</option><option value="box">Box (Average)</option><option value="median">Median</option>
-        </select>
-      <//>
-      <${Field} label="Kernel Size (odd number)"><input type="number" style=${inp} min="1" step="2" value=${cfg.kernel_size ?? 5} onChange=${e => set("kernel_size", +e.target.value)} /><//>
-      ${(cfg.type ?? "gaussian") === "gaussian" && html`
-        <${Field} label="Sigma (0 = auto)"><input type="number" style=${inp} value=${cfg.sigma ?? 0} onChange=${e => set("sigma", +e.target.value)} /><//>
-      `}`; break;
-
-    case "edge_detect": fields = html`
-      <${Field} label="Algorithm">
-        <select style=${inp} value=${cfg.algorithm ?? "canny"} onChange=${e => set("algorithm", e.target.value)}>
-          <option value="canny">Canny</option><option value="sobel">Sobel</option><option value="laplacian">Laplacian</option>
-        </select>
-      <//>
-      ${(cfg.algorithm ?? "canny") === "canny" && html`
-        <${Field} label=${"Threshold 1: " + (cfg.threshold1 ?? 50)}>
-          <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="500" step="5"
-            value=${cfg.threshold1 ?? 50} onChange=${e => set("threshold1", +e.target.value)} />
-        <//>
-        <${Field} label=${"Threshold 2: " + (cfg.threshold2 ?? 150)}>
-          <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="500" step="5"
-            value=${cfg.threshold2 ?? 150} onChange=${e => set("threshold2", +e.target.value)} />
-        <//>
-      `}`; break;
-
-    case "corner_detect": fields = html`
-      <${Field} label="Algorithm">
-        <select style=${inp} value=${cfg.algorithm ?? "harris"} onChange=${e => set("algorithm", e.target.value)}>
-          <option value="harris">Harris</option><option value="fast">FAST</option><option value="shitomasi">Shi-Tomasi</option>
-        </select>
-      <//>
-      <${Field} label="Max Corners"><input type="number" style=${inp} value=${cfg.max_corners ?? 100} onChange=${e => set("max_corners", +e.target.value)} /><//>
-      <${Field} label=${"Quality: " + (cfg.quality ?? 0.01)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0.001" max="0.1" step="0.001"
-          value=${cfg.quality ?? 0.01} onChange=${e => set("quality", +e.target.value)} />
-      <//>
-      <${Field} label="Min Distance (px)"><input type="number" style=${inp} value=${cfg.min_dist ?? 10} onChange=${e => set("min_dist", +e.target.value)} /><//>
-      `; break;
-
-    case "threshold": fields = html`
-      <${Field} label="Type">
-        <select style=${inp} value=${cfg.type ?? "binary"} onChange=${e => set("type", e.target.value)}>
-          <option value="binary">Binary</option><option value="binary_inv">Binary Inverse</option>
-          <option value="otsu">Otsu (auto)</option><option value="adaptive">Adaptive Gaussian</option>
-        </select>
-      <//>
-      ${(cfg.type !== "otsu" && cfg.type !== "adaptive") && html`
-        <${Field} label=${"Threshold: " + (cfg.threshold ?? 127)}>
-          <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="255" step="1"
-            value=${cfg.threshold ?? 127} onChange=${e => set("threshold", +e.target.value)} />
-        <//>
-      `}
-      <${Field} label="Max Value"><input type="number" style=${inp} value=${cfg.max_val ?? 255} onChange=${e => set("max_val", +e.target.value)} /><//>
-      `; break;
-
-    case "color_convert": fields = html`
-      <${Field} label="Conversion">
-        <select style=${inp} value=${cfg.conversion ?? "bgr2gray"} onChange=${e => set("conversion", e.target.value)}>
-          <option value="bgr2gray">BGR → Grayscale</option><option value="bgr2hsv">BGR → HSV</option>
-          <option value="bgr2rgb">BGR → RGB</option><option value="bgr2lab">BGR → Lab</option>
-          <option value="bgr2yuv">BGR → YUV</option><option value="gray2bgr">Grayscale → BGR</option>
-          <option value="hsv2bgr">HSV → BGR</option>
-        </select>
-      <//>
-      `; break;
-
-    case "morph": fields = html`
-      <${Field} label="Operation">
-        <select style=${inp} value=${cfg.operation ?? "erode"} onChange=${e => set("operation", e.target.value)}>
-          <option value="erode">Erode</option><option value="dilate">Dilate</option>
-          <option value="open">Open (erode→dilate)</option><option value="close">Close (dilate→erode)</option>
-          <option value="gradient">Gradient</option><option value="tophat">Top Hat</option><option value="blackhat">Black Hat</option>
-        </select>
-      <//>
-      <${Field} label="Kernel Size"><input type="number" style=${inp} min="1" step="2" value=${cfg.kernel_size ?? 3} onChange=${e => set("kernel_size", +e.target.value)} /><//>
-      <${Field} label="Iterations"><input type="number" style=${inp} min="1" value=${cfg.iterations ?? 1} onChange=${e => set("iterations", +e.target.value)} /><//>
-      `; break;
-
-    case "resize": fields = html`
-      <${Field} label="Width (px)"><input type="number" style=${inp} value=${cfg.width ?? 640} onChange=${e => set("width", +e.target.value)} /><//>
-      <${Field} label="Height (px)"><input type="number" style=${inp} value=${cfg.height ?? 480} onChange=${e => set("height", +e.target.value)} /><//>
-      <${Field} label="Interpolation">
-        <select style=${inp} value=${cfg.interpolation ?? "area"} onChange=${e => set("interpolation", e.target.value)}>
-          <option value="nearest">Nearest (fastest)</option><option value="linear">Linear</option>
-          <option value="cubic">Cubic</option><option value="area">Area (best for shrink)</option><option value="lanczos">Lanczos</option>
-        </select>
-      <//>
-      `; break;
-
-    case "affine_transform": fields = html`
-      <${Field} label="Translate X (px)"><input type="number" style=${inp} value=${cfg.tx ?? 0} onChange=${e => set("tx", +e.target.value)} /><//>
-      <${Field} label="Translate Y (px)"><input type="number" style=${inp} value=${cfg.ty ?? 0} onChange=${e => set("ty", +e.target.value)} /><//>
-      <${Field} label=${"Rotation Angle: " + (cfg.angle ?? 0) + "°"}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="-180" max="180" step="1"
-          value=${cfg.angle ?? 0} onChange=${e => set("angle", +e.target.value)} />
-      <//>
-      <${Field} label=${"Scale: " + (cfg.scale ?? 1.0)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0.1" max="3.0" step="0.05"
-          value=${cfg.scale ?? 1.0} onChange=${e => set("scale", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "draw_roi": fields = html`
-      <${Field} label="Zone ID"><input style=${inp} value=${cfg.zone_id ?? "zone_1"} onChange=${e => set("zone_id", e.target.value)} /><//>
-      ${(running && sessionId)
-        ? html`<div style=${{ fontSize: 10, color: "#58a6ff", marginBottom: 8 }}>
-            ↓ Use the canvas below to drag / add / remove polygon points
-          </div>`
-        : html`<${Field} label="Polygon Points (JSON array — or run & use canvas)">
-            <textarea style=${{ ...inp, height: 80, resize: "vertical", fontFamily: "monospace", fontSize: 10 }}
-              value=${JSON.stringify(cfg.polygon ?? [[10,10],[90,10],[90,90],[10,90]])}
-              onChange=${e => { try { set("polygon", JSON.parse(e.target.value)); } catch {} }} />
-          <//>
-        `}
-      `; break;
-
-    case "draw_line": fields = html`
-      <${Field} label="Line ID"><input style=${inp} value=${cfg.line_id ?? "line_1"} onChange=${e => set("line_id", e.target.value)} /><//>
-      <${Field} label="Direction">
-        <select style=${inp} value=${cfg.direction ?? "both"} onChange=${e => set("direction", e.target.value)}>
-          <option value="both">Both directions</option><option value="up">Up only</option><option value="down">Down only</option>
-        </select>
-      <//>
-      ${(running && sessionId)
-        ? html`<div style=${{ fontSize: 10, color: "#58a6ff", marginBottom: 8 }}>
-            ↓ Drag the A / B endpoints on the canvas below to reposition the line
-          </div>`
-        : html`<${Field} label="Line Points [x1,y1],[x2,y2]">
-            <textarea style=${{ ...inp, height: 48, resize: "none", fontFamily: "monospace", fontSize: 10 }}
-              value=${JSON.stringify(cfg.line ?? [[10,50],[90,50]])}
-              onChange=${e => { try { set("line", JSON.parse(e.target.value)); } catch {} }} />
-          <//>
-        `}
-      `; break;
-
-    case "object_tracker": fields = html`
-      <${Field} label="Algorithm">
-        <select style=${inp} value=${cfg.algorithm ?? "bytetrack"} onChange=${e => set("algorithm", e.target.value)}>
-          <option value="bytetrack">ByteTrack (IoU, no ReID — pip install bytetracker)</option>
-          <option value="deepsort">DeepSORT (IoU + appearance — pip install deep-sort-realtime)</option>
-        </select>
-      <//>
-      <${Field} label="Max Age (frames lost before drop)"><input type="number" style=${inp} value=${cfg.max_age ?? 30} onChange=${e => set("max_age", +e.target.value)} /><//>
-      <${Field} label="IoU Threshold"><input type="number" step="0.05" min="0" max="1" style=${inp} value=${cfg.iou_threshold ?? 0.3} onChange=${e => set("iou_threshold", +e.target.value)} /><//>
-      <div style=${{ fontSize: 10, color: "#8b949e", padding: "2px 0 4px" }}>
-        Track IDs are written to each detection. Draw BBox reads them when <b>Show Track ID</b> is enabled.
-        Add a <b>Track DB</b> node after this to store position history and motion trails.
-      </div>
-      `; break;
-
-    case "track_db": fields = html`
-      <${Field} label="Max Tracks (RAM limit)"><input type="number" style=${inp} value=${cfg.max_tracks ?? 200} onChange=${e => set("max_tracks", +e.target.value)} /><//>
-      <${Field} label="Position History (frames)"><input type="number" style=${inp} value=${cfg.history_frames ?? 30} onChange=${e => set("history_frames", +e.target.value)} /><//>
-      <${Field} label="Draw Motion Trails on frame">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.draw_trails !== false}
-            onChange=${e => set("draw_trails", e.target.checked)} />
-          <span style=${{ fontSize: 11, color: "#8b949e" }}>Coloured trail per track ID</span>
-        </label>
-      <//>
-      <div style=${{ fontSize: 10, color: "#8b949e", padding: "4px 0" }}>
-        Stores: class, age, travel distance (px), last position, colour histogram per ID.
-        Downstream nodes can read <code style=${{ color: "#79c0ff" }}>ctx.metadata["track_db"]</code>.
-      </div>
-      `; break;
-
-    case "counter": fields = html`
-      <${Field} label="Display Label"><input style=${inp} value=${cfg.label ?? "Count"} onChange=${e => set("label", e.target.value)} placeholder="Count" /><//>
-      <${Field} label="Trigger Type">
-        <select style=${inp} value=${cfg.trigger_type ?? "line_cross"} onChange=${e => set("trigger_type", e.target.value)}>
-          <option value="line_cross">Line Cross (connect draw_line → line_ref)</option>
-          <option value="zone_enter">Zone Enter (connect draw_roi → frame)</option>
-          <option value="zone_exit">Zone Exit (connect draw_roi → frame)</option>
-        </select>
-      <//>
-      <${Field} label="Trigger ID — matches line_id / zone_id"><input style=${inp} value=${cfg.trigger_id ?? "line_1"} onChange=${e => set("trigger_id", e.target.value)} placeholder="line_1" /><//>
-      <${Field} label="Count Classes (comma-sep, empty = all)">
-        <input style=${inp}
-          value=${Array.isArray(cfg.count_classes) ? cfg.count_classes.join(", ") : ""}
-          onChange=${e => set("count_classes", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-          placeholder="person, car  (empty = all)" />
-      <//>
-      <${Field} label="Show count overlay on frame">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.show_overlay !== false}
-            onChange=${e => set("show_overlay", e.target.checked)} />
-          <span style=${{ fontSize: 11, color: "#8b949e" }}>Draw count text on frame</span>
-        </label>
-      <//>
-      <div style=${{ fontSize: 10, color: "#8b949e", padding: "4px 0 2px" }}>
-        ⓘ Trigger condition: <b>center point</b> of bounding box crosses the line
-        (sign of cross-product changes). Not boundary touch. Requires tracked detections
-        (track_id ≥ 0) — connect an <b>object_tracker</b> node upstream.
-        Connect <b>draw_line.line_ref → counter.line_ref</b> to auto-sync the trigger ID.
-      </div>
-      `; break;
-
-    case "filter": fields = html`
-      <${Field} label="Allowed Classes (comma-separated, empty = all)">
-        <input style=${inp}
-          value=${Array.isArray(cfg.allowed_classes) ? cfg.allowed_classes.join(", ") : ""}
-          onChange=${e => set("allowed_classes", e.target.value.split(",").map(s => s.trim()).filter(Boolean))}
-          placeholder="person, car, truck" />
-      <//>
-      <${Field} label=${"Min Confidence: " + (cfg.min_confidence ?? 0)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="1" step="0.05"
-          value=${cfg.min_confidence ?? 0} onChange=${e => set("min_confidence", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "param": fields = html`
-      <${Field} label="Params (JSON object)">
-        <textarea style=${{ ...inp, height: 120, resize: "vertical", lineHeight: 1.5, fontFamily: "Consolas,'Courier New',monospace", fontSize: 11 }}
-          value=${JSON.stringify(cfg.params ?? {}, null, 2)}
-          onChange=${e => { try { set("params", JSON.parse(e.target.value)); } catch {} }} />
-      <//>
-      `; break;
-
-    case "python_function":
-      fields = html`<${PythonFunctionFields} node=${node} cfg=${cfg} onUpdate=${onUpdate} />`;
-      break;
-
-    case "cpp_function": fields = html`
-      <${Field} label="Compile Status">
-        <div style=${{ fontSize: 12, padding: "2px 0",
-                        color: cfg.compile_status === "ok" ? "#3fb950" : cfg.compile_status === "error" ? "#f85149" : "#8b949e" }}>
-          ${cfg.compile_status ?? "uncompiled"}
-        </div>
-      <//>
-      <${Field} label="Compiled .so Hash">
-        <input style=${{ ...inp, fontFamily: "monospace", fontSize: 10 }} readOnly value=${cfg.compiled_so_hash ?? "(compile first)"} />
-      <//>
-      `; break;
-
-    case "stream_viewer": fields = html`
-      <${Field} label=${"JPEG Quality: " + (cfg.jpeg_quality ?? 80)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="10" max="100" step="5"
-          value=${cfg.jpeg_quality ?? 80} onChange=${e => set("jpeg_quality", +e.target.value)} />
-      <//>
-      <${Field} label="Max FPS"><input type="number" style=${inp} value=${cfg.max_fps ?? 30} onChange=${e => set("max_fps", +e.target.value)} /><//>
-      <${Field} label="Draw Detections">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.draw_detections !== false}
-            onChange=${e => set("draw_detections", e.target.checked)} />
-          <span style=${{ color: "#c9d1d9", fontSize: 12 }}>Overlay bounding boxes from detections</span>
-        </label>
-      <//>
-      `; break;
-
-    case "video_writer": fields = html`
-      <${Field} label="Output Path"><input style=${inp} value=${cfg.output_path ?? "./output.mp4"} onChange=${e => set("output_path", e.target.value)} /><//>
-      <${Field} label="FPS"><input type="number" style=${inp} value=${cfg.fps ?? 30} onChange=${e => set("fps", +e.target.value)} /><//>
-      `; break;
-
-    case "trigger_webhook": fields = html`
-      <${Field} label="Protocol">
-        <select style=${inp} value=${cfg.protocol ?? "http"} onChange=${e => set("protocol", e.target.value)}>
-          <option value="http">HTTP POST</option><option value="mqtt">MQTT</option>
-        </select>
-      <//>
-      <${Field} label="URL / Broker">
-        <input style=${inp}
-          value={cfg.url ?? ""}
-          onChange=${e => set("url", e.target.value)}
-          placeholder="https://..." />
-      <//>
-      <${Field} label="Trigger On">
-        <select style=${inp} value=${cfg.trigger_on ?? "count_change"} onChange=${e => set("trigger_on", e.target.value)}>
-          <option value="every_frame">Every Frame</option><option value="detection">On Detection</option><option value="count_change">On Count Change</option>
-        </select>
-      <//>
-      <${Field} label=${"Rate Limit: " + (cfg.rate_limit_s ?? 2.0) + "s"}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="10" step="0.5"
-          value=${cfg.rate_limit_s ?? 2.0} onChange=${e => set("rate_limit_s", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "mqtt_publish": fields = html`
-      <${Field} label="Broker"><input style=${inp} value=${cfg.broker ?? "localhost"} onChange=${e => set("broker", e.target.value)} /><//>
-      <${Field} label="Port"><input type="number" style=${inp} value=${cfg.port ?? 1883} onChange=${e => set("port", +e.target.value)} /><//>
-      <${Field} label="Topic"><input style=${inp} value=${cfg.topic ?? "cv_flow/events"} onChange=${e => set("topic", e.target.value)} /><//>
-      <${Field} label="QoS">
-        <select style=${inp} value=${cfg.qos ?? 0} onChange=${e => set("qos", +e.target.value)}>
-          <option value="0">0 — At most once</option><option value="1">1 — At least once</option><option value="2">2 — Exactly once</option>
-        </select>
-      <//>
-      <${Field} label="Trigger On">
-        <select style=${inp} value=${cfg.trigger_on ?? "detection"} onChange=${e => set("trigger_on", e.target.value)}>
-          <option value="every_frame">Every Frame</option><option value="detection">On Detection</option><option value="count_change">On Count Change</option>
-        </select>
-      <//>
-      <${Field} label=${"Rate Limit: " + (cfg.rate_limit_s ?? 0.5) + "s"}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0" max="5" step="0.1"
-          value=${cfg.rate_limit_s ?? 0.5} onChange=${e => set("rate_limit_s", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "kafka_produce": fields = html`
-      <${Field} label="Bootstrap Servers">
-        <input style=${inp} value=${cfg.bootstrap_servers ?? "localhost:9092"} onChange=${e => set("bootstrap_servers", e.target.value)} placeholder="host1:9092,host2:9092" />
-      <//>
-      <${Field} label="Topic"><input style=${inp} value=${cfg.topic ?? "cv_flow_events"} onChange=${e => set("topic", e.target.value)} /><//>
-      <${Field} label="Trigger On">
-        <select style=${inp} value=${cfg.trigger_on ?? "detection"} onChange=${e => set("trigger_on", e.target.value)}>
-          <option value="every_frame">Every Frame</option><option value="detection">On Detection</option><option value="count_change">On Count Change</option>
-        </select>
-      <//>
-      <${Field} label="Rate Limit (s, 0 = unlimited)">
-        <input type="number" style=${inp} min="0" step="0.1" value=${cfg.rate_limit_s ?? 0} onChange=${e => set("rate_limit_s", +e.target.value)} />
-      <//>
-      `; break;
-
-    case "face_detect": fields = html`
-      <${Field} label="Model Key">
-        <select style=${inp} value=${cfg.model_key ?? "scrfd_10g"} onChange=${e => set("model_key", e.target.value)}>
-          <option value="scrfd_10g">SCRFD-10G (High accuracy, ~16MB) — Recommended</option>
-          <option value="scrfd_500m">SCRFD-500M (Lightweight, ~2MB) — CPU Real-time</option>
-        </select>
-      <//>
-      <${Field} label=${"Confidence: " + (cfg.conf_threshold ?? 0.5)}>
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0.1" max="0.95" step="0.05"
-          value=${cfg.conf_threshold ?? 0.5} onChange=${e => set("conf_threshold", +e.target.value)} />
-      <//>
-      <${Field} label="Device">
-        <select style=${inp} value=${cfg.device ?? "cpu"} onChange=${e => set("device", e.target.value)}>
-          <option value="cpu">CPU</option><option value="cuda">CUDA (GPU)</option>
-        </select>
-      <//>
-      <${Field} label="Min Face Size (px)">
-        <input type="number" style=${inp} min="10" value=${cfg.min_face_size_px ?? 20} onChange=${e => set("min_face_size_px", +e.target.value)} />
-      <//>
-      <${Field} label="Return Largest Only">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.return_largest === true}
-            onChange=${e => set("return_largest", e.target.checked)} />
-          <span style=${{ fontSize: 12, color: "#c9d1d9" }}>Only output the largest detected face</span>
-        </label>
-      <//>
-      <div style=${{ fontSize: 11, color: "#8b949e", lineHeight: 1.5, marginTop: 6, padding: 8, background: "#21262d", borderRadius: 5, border: "1px solid #30363d" }}>
-        <b style=${{ color: "#d29922" }}>Auto-download</b> — If the selected model is not present, it downloads automatically on first run via InsightFace. Requires: <code>pip install insightface onnxruntime</code>
-      </div>
-      `; break;
-
-    case "embedding": fields = html`
-      <${Field} label="Model">
-        <select style=${inp} value=${cfg.model_key ?? "mobilefacenet"} onChange=${e => set("model_key", e.target.value)}>
-          <option value="mobilefacenet">MobileFaceNet (~4 MB, CPU real-time)</option>
-          <option value="arcface_r50">ArcFace R50 (~166 MB, higher accuracy)</option>
-        </select>
-      <//>
-      <${Field} label="L2 Normalize Output">
-        <label style=${{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input type="checkbox" checked=${cfg.normalize !== false}
-            onChange=${e => set("normalize", e.target.checked)} />
-          <span style=${{ fontSize: 12, color: "#c9d1d9" }}>Normalize embedding vectors (recommended)</span>
-        </label>
-      <//>
-      `; break;
-
-    case "face_db": fields = html`
-      <${Field} label="Match Threshold">
-        <input type="range" style=${{ width: "100%", accentColor: "#58a6ff" }} min="0.1" max="0.99" step="0.01"
-          value=${cfg.threshold ?? 0.5} onChange=${e => set("threshold", +e.target.value)} />
-        <div style=${{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>Current: ${cfg.threshold ?? 0.5} — cosine similarity required to count as a match</div>
-      <//>
-      <${Field} label="Identity Name (Enroll Label)">
-        <input type="text" style=${inp} value=${cfg.name ?? "Person"}
-          onChange=${e => set("name", e.target.value)} placeholder="Person" />
-        <div style=${{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>Name stored when the Enroll dot receives True</div>
-      <//>
-      <${Field} label="Max Embeddings to Save per Identity">
-        <input type="number" style=${inp} min="1" max="200" step="1"
-          value=${cfg.max_save ?? 10} onChange=${e => set("max_save", +e.target.value)} />
-        <div style=${{ fontSize: 10, color: "#8b949e", marginTop: 2 }}>Stop saving after this many embeddings for the same name</div>
-      <//>
-      <${Field} label="DB Path">
-        <input type="text" style=${inp} value=${cfg.db_path ?? "storage/facedb"}
-          onChange=${e => set("db_path", e.target.value)} />
-      <//>
-      `; break;
-
-    case "pipeline_output": fields = html`
-      <${Field} label="Output Label">
-        <input style=${inp} value=${cfg.label ?? "Output"}
-          onChange=${e => set("label", e.target.value)} placeholder="Output" />
-      <//>
-      <${Field} label="Description">
-        <input style=${inp} value=${cfg.description ?? ""}
-          onChange=${e => set("description", e.target.value)} placeholder="What this output carries" />
-      <//>
-      <${PipelineOutputPortEditor} node=${node} cfg=${cfg} onUpdate=${onUpdate} />
-      <div style=${{ fontSize: 11, color: "#8b949e", lineHeight: 1.5, marginTop: 6, padding: "8px", background: "#21262d", borderRadius: 5, border: "1px solid #30363d" }}>
-        <b style=${{ color: "#d29922" }}>Pipeline Output</b> marks where data exits this pipeline when saved as a reusable template. Add as many input ports as you need.
-      </div>
-      `; break;
-
-    default: {
-      const isTemplate = node.type.startsWith("tmpl_");
-      const pj = cfg.pipeline_json;
-      const customNodes = loadCustomNodes().find(c => c.type === node.type);
-      const cfgKeys = Object.keys(cfg).filter(k => k !== "pipeline_json");
-
-      fields = html`
-        <!-- Node label (visual header) -->
-        <${Field} label="Node Label">
-          <input style=${inp} value=${node.data.label ?? node.type}
-            onChange=${e => onUpdate(node.id, cfg, e.target.value)} />
-        <//>
-
-        ${isTemplate && pj && html`
-          <!-- Template pipeline summary -->
-          <div style=${{ background: "#0d1117", border: "1px solid #21262d", borderRadius: 6,
-                          padding: "8px 12px", marginBottom: 8, fontSize: 11 }}>
-            <div style=${{ fontWeight: 600, color: "#d29922", marginBottom: 5 }}>⬡ Embedded Pipeline</div>
-            <div style=${{ color: "#8b949e" }}>${(pj.nodes ?? []).length} nodes · ${(pj.edges ?? []).length} edges</div>
-            <div style=${{ color: "#555d68", fontSize: 10, marginTop: 4 }}>
-              ${(pj.nodes ?? []).map(n => n.type).join(" → ")}
-            </div>
-          </div>`}
-
-        <!-- Ports summary (read-only) -->
-        ${(() => {
-          const ports = node.data.ports ?? NODE_PORTS[node.type];
-          if (!ports) return null;
-          return html`
-            <div style=${{ marginBottom: 8 }}>
-              <div style=${{ fontSize: 10, color: "#555d68", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Ports</div>
-              <div style=${{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                ${ports.inputs.map(p => html`
-                  <span key=${p.id} style=${{ fontSize: 10, background: "#1a2d40", color: "#58a6ff",
-                                               border: "1px solid #1e4060", borderRadius: 4, padding: "1px 7px" }}>
-                    ● ${p.label}
-                  </span>`)}
-                ${ports.outputs.map(p => html`
-                  <span key=${p.id} style=${{ fontSize: 10, background: "#1a3020", color: "#3fb950",
-                                               border: "1px solid #1e5030", borderRadius: 4, padding: "1px 7px" }}>
-                    ${p.label} ●
-                  </span>`)}
-              </div>
-            </div>`;
-        })()}
-
-        <!-- Editable config (non-pipeline_json keys) -->
-        ${cfgKeys.length > 0 && html`
-          <${Field} label="Config">
-            <textarea
-              style=${{ ...inp, height: 100, resize: "vertical", fontFamily: "Consolas,'Courier New',monospace", fontSize: 10 }}
-              value=${JSON.stringify(Object.fromEntries(cfgKeys.map(k => [k, cfg[k]])), null, 2)}
-              onChange=${e => {
-                try { const parsed = JSON.parse(e.target.value);
-                  onUpdate(node.id, { ...parsed, ...(pj ? { pipeline_json: pj } : {}) }); } catch {}
-              }} />
-          <//>
-        `}`;
-    }; break;
-    }  // end switch (legacy)
-  }  // end if(false)
 
   const meta = NODE_META[node.type] ?? { icon: "◻", label: node.type, group: "utility" };
   return html`
@@ -1709,6 +1243,12 @@ function PropertiesPanel({ node, onUpdate, onDuplicate, sessionId, running, node
 
       <${PortsInfo} node=${node} />
 
+      ${running && html`
+        <${NodeStatsDashboard}
+          stats=${nodeStats?.[node.id]}
+          sysInfo=${sysInfo}
+          nodeType=${node.type} />`}
+
       ${node.type === "python_node" && html`
         <button onClick=${onSaveNode}
           style=${{ width: "100%", marginTop: 10, padding: "6px 0", borderRadius: 6,
@@ -1736,7 +1276,7 @@ const CAT_COLOR = {
   "Classification":   { bg: "#2a1a2d", border: "#4a1a4e", accent: "#bc8cff" },
 };
 
-function ModelHubModal({ onClose }) {
+function ModelHubModal({ onClose, onUseModel }) {
   const [models, setModels]           = useState([]);
   const [loading, setLoading]         = useState(true);
   const [uploading, setUploading]     = useState(false);
@@ -1921,36 +1461,78 @@ function ModelHubModal({ onClose }) {
 
         <!-- Tab: Library -->
         ${tab === "library" && html`
-          <div style=${{ overflowY: "auto", flex: 1, padding: "10px 18px" }}>
+          <div style=${{ overflowY: "auto", flex: 1, padding: "10px 18px", display: "flex", flexDirection: "column" }}>
+            
+            <!-- Filters -->
+            <div style=${{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap", alignItems: "center" }}>
+              <input type="text" placeholder="🔍 Search models..." style=${{ ...inp, width: 140, padding: "4px 8px" }} />
+              ${CATALOG_CATEGORIES.map(cat => html`
+                <button key=${cat} style=${{ padding: "2px 8px", borderRadius: 12, fontSize: 10, cursor: "pointer",
+                                              background: "#0d1117", border: "1px solid #30363d", color: "#8b949e" }}>
+                  ${cat === "All" ? "All" : cat.replace("Object ", "").replace(" Estimation", "")}
+                </button>
+              `)}
+            </div>
+
             ${loading && html`<div style=${{ color: "#8b949e", fontSize: 12, textAlign: "center", padding: 24 }}>Loading…</div>`}
             ${!loading && models.length === 0 && html`
               <div style=${{ color: "#8b949e", fontSize: 12, textAlign: "center", padding: 24 }}>
                 No models yet — download from catalog or upload a custom ONNX model.
               </div>`}
-            ${models.map(m => html`
+            
+            ${models.map(m => {
+              const tagColor = m.tag === "stable" ? "🟢" : m.tag === "experimental" ? "🟡" : "🔴";
+              const ins = (m.ports?.inputs ?? []).map(p => p.name).join(", ");
+              const outs = (m.ports?.outputs ?? []).map(p => p.name).join(", ");
+              const meta = m.metadata || {};
+              const shapeStr = (m.ports?.inputs?.[0]?.shape || []).slice(2).join("Ã—") || "Dynamic";
+              const info = [
+                shapeStr,
+                meta.file_size ? (meta.file_size / 1024 / 1024).toFixed(1) + "MB" : null,
+                meta.dtype,
+                "ONNX"
+              ].filter(Boolean).join(" · ");
+
+              return html`
               <div key=${m.id} style=${{ background: "#0d1117", border: "1px solid #30363d", borderRadius: 8, padding: "10px 14px", marginBottom: 8 }}>
-                <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style=${{ fontSize: 18 }}>${TASK_ICON[m.task] ?? "🧠"}</span>
-                  <span style=${{ fontWeight: 600, fontSize: 13, color: "#e2e8f0", flex: 1 }}>${m.name}</span>
-                  <span style=${{ fontSize: 10, background: "#1a2a40", color: "#58a6ff", borderRadius: 4, padding: "1px 6px" }}>v${m.version}</span>
+                
+                <div style=${{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                  <span title=${m.tag}>${tagColor}</span>
+                  <span style=${{ fontWeight: 600, fontSize: 14, color: "#e2e8f0" }}>${m.name}</span>
                   <span style=${{ fontSize: 10, background: "#1a3a20", color: "#3fb950", borderRadius: 4, padding: "1px 6px" }}>${m.task}</span>
+                  <span style=${{ fontSize: 10, background: "#1a2a40", color: "#58a6ff", borderRadius: 4, padding: "1px 6px" }}>v${m.version}</span>
+                  <span style=${{ fontSize: 10, color: "#8b949e", marginLeft: "auto", fontFamily: "monospace" }}>${m.id.split("-")[0]}</span>
                 </div>
-                <div style=${{ fontSize: 10, color: "#8b949e", fontFamily: "monospace", marginBottom: 8, wordBreak: "break-all" }}>ID: ${m.id}</div>
+
+                <div style=${{ fontSize: 11, color: "#58a6ff", fontFamily: "monospace", background: "#161b22", padding: "4px 8px", borderRadius: 4, marginBottom: 6, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span>◉→ [${ins || "in"}]</span>
+                  <span style=${{ color: "#555d68", letterSpacing: 2 }}>········→</span>
+                  <span>[${outs || "out"}] →◉</span>
+                </div>
+
+                <div style=${{ fontSize: 11, color: "#8b949e", marginBottom: 10 }}>${info}</div>
+
                 <div style=${{ display: "flex", gap: 6 }}>
+                  <button onClick=${() => onUseModel(m)}
+                    style=${{ padding: "4px 12px", background: "#1f3a5e", border: "1px solid #58a6ff", color: "#58a6ff", borderRadius: 5, cursor: "pointer", fontSize: 11, fontWeight: 600 }}>
+                    Use in pipeline
+                  </button>
+                  <button style=${{ padding: "4px 10px", background: "#21262d", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>
+                    Versions ▾
+                  </button>
                   <button onClick=${() => navigator.clipboard.writeText(m.id)}
-                    style=${{ padding: "3px 10px", background: "#21262d", border: "1px solid #30363d", color: "#c9d1d9", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>
-                    Copy ID
-                  </button>
+                    style=${{ padding: "4px 10px", background: "transparent", border: "1px solid transparent", color: "#8b949e", cursor: "pointer", fontSize: 11, marginLeft: "auto" }}
+                    title="Copy ID">📋</button>
                   <button onClick=${() => hotReload(m.id)}
-                    style=${{ padding: "3px 10px", background: "#1f3a5e", border: "1px solid #58a6ff", color: "#58a6ff", borderRadius: 5, cursor: "pointer", fontSize: 11 }}>
-                    Hot Reload
-                  </button>
+                    style=${{ padding: "4px 10px", background: "transparent", border: "1px solid transparent", color: "#8b949e", cursor: "pointer", fontSize: 11 }}
+                    title="Hot Reload">🔄</button>
                   <button onClick=${() => del(m.id)}
-                    style=${{ padding: "3px 10px", background: "#3d1a1a", border: "1px solid #f85149", color: "#f85149", borderRadius: 5, cursor: "pointer", fontSize: 11, marginLeft: "auto" }}>
-                    Delete
-                  </button>
+                    style=${{ padding: "4px 10px", background: "transparent", border: "1px solid transparent", color: "#f85149", cursor: "pointer", fontSize: 11 }}
+                    title="Delete">🗑</button>
                 </div>
-              </div>`)}
+
+              </div>`;
+            })}
           </div>`}
 
         <!-- Tab: Download Models Catalog -->
@@ -2928,7 +2510,7 @@ function Palette({ groups, onAddCustom, onDeleteTemplate }) {
                onClick=${handleDelete}
                onMouseEnter=${e => e.currentTarget.style.background = "#2d1010"}
                onMouseLeave=${e => e.currentTarget.style.background = "transparent"}>
-            🗑 Xóa template
+            🗑 XÃ³a template
           </div>
         </div>`}
     </div>`;
@@ -3311,7 +2893,7 @@ function NodeDataPanel({ nodeType, data }) {
   // ── detection nodes (nms / filter / draw_bbox) ───────────────────────────
   else if (["nms", "filter", "draw_bbox", "model_inference"].includes(nodeType)) {
     body = html`
-      <div style=${s.card}><${KV} k="Detections" v=${data.detection_count ?? data.raw_shape?.join("×") ?? "—"} /></div>
+      <div style=${s.card}><${KV} k="Detections" v=${data.detection_count ?? data.raw_shape?.join("Ã—") ?? "—"} /></div>
       ${(data.detections ?? []).map((d, i) => html`
         <div key=${i} style=${s.card}>
           <div style=${{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
@@ -3376,7 +2958,7 @@ function NodeDataPanel({ nodeType, data }) {
     body = html`
       <div style=${s.card}>
         <${KV} k="Crops produced" v=${data.crop_count} />
-        <${KV} k="Output size"    v=${data.image_size + " × " + data.image_size + " px"} />
+        <${KV} k="Output size"    v=${data.image_size + " Ã— " + data.image_size + " px"} />
       </div>
       ${(data.iou_pairs ?? []).length > 0 && html`
         <div style=${s.card}>
@@ -3500,7 +3082,7 @@ function SeenFacesModal({ entries, onClose }) {
           <span>📋 Seen Faces (${entries.length})</span>
           <button onClick=${onClose}
             style=${{ background: "none", border: "none", color: "#8b949e",
-                       cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+                       cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>Ã—</button>
         </div>
         <div style=${{ overflowY: "auto", flex: 1, padding: 12 }}>
           ${sorted.length === 0
@@ -3643,11 +3225,16 @@ function App() {
   const [showSeenLog, setShowSeenLog]   = useState(false);
   const [nodeDataMap, setNodeDataMap]   = useState({});   // node_id → JSON metadata snapshot
   const [nodeVizMap,  setNodeVizMap]    = useState({});   // node_id → { items: [{type,b64,data,...}] }
+  const [nodeStats,   setNodeStats]     = useState({});   // node_id → {avg_ms, fps, errors} for primary session
+  const [sysInfo,     setSysInfo]       = useState(null); // system resource snapshot
   const [codeEditId,  setCodeEditId]    = useState(null); // node id whose code editor overlay is open
+  const [allSessions,     setAllSessions]     = useState([]); // [{id, name, wsPort}] — all concurrently running
+  const [allSessionStats, setAllSessionStats] = useState({});  // {sessionId: {nodeId: stats}}
 
   const [showOpen,        setShowOpen]         = useState(false);
   const [showSamples,     setShowSamples]     = useState(false);
   const [showModels,      setShowModels]       = useState(false);
+  const [showDataHub,     setShowDataHub]      = useState(false);
   const [showCustomNode,  setShowCustomNode]   = useState(false);
   const [showShortcuts,   setShowShortcuts]    = useState(false);
   const [showQuickAdd,    setShowQuickAdd]     = useState(false);
@@ -3674,8 +3261,10 @@ function App() {
     return grps;
   });
 
-  const evWsRef   = useRef(null);
-  const importRef = useRef(null);
+  const evWsRef          = useRef(null);
+  const statsIntervalRef = useRef(null);
+  const importRef        = useRef(null);
+  const sessionMapRef    = useRef(new Map()); // sessionId → {ws, statsInterval}
   const { project, fitView } = useReactFlow();
 
   // Panel resize handlers
@@ -3709,27 +3298,70 @@ function App() {
     setToast({ msg, ok }); setTimeout(() => setToast(null), 3000);
   }, []);
 
-  // Poll engine status while running — auto-stop + toast if the engine crashes
+  // Poll engine status for ALL running sessions — auto-cleanup on finish/crash
   useEffect(() => {
-    if (!running || !sessionId) return;
+    if (!allSessions.length) return;
     const t = setInterval(async () => {
-      try {
-        const r = await apiFetch("GET", "/execution/status/" + sessionId);
-        if (r.status === "error") {
-          setRunning(false); setSid(null);
-          if (evWsRef.current) { evWsRef.current.close(); evWsRef.current = null; }
-          showToast("Engine crashed — check camera / console", false);
-        } else if (r.status === "completed") {
-          setRunning(false); setSid(null);
-          showToast("Pipeline finished");
-        }
-      } catch {}
+      for (const s of [...allSessions]) {
+        try {
+          const r = await apiFetch("GET", "/execution/status/" + s.id);
+          if (r.status !== "running") {
+            const isErr = r.status === "error";
+            const refs = sessionMapRef.current.get(s.id);
+            if (refs) {
+              if (refs.ws) refs.ws.close();
+              if (refs.statsInterval) clearInterval(refs.statsInterval);
+              sessionMapRef.current.delete(s.id);
+            }
+            setAllSessions(prev => prev.filter(x => x.id !== s.id));
+            setAllSessionStats(prev => { const n = {...prev}; delete n[s.id]; return n; });
+            if (s.id === sessionId) {
+              setRunning(false); setSid(null); setNodeStats({});
+              if (evWsRef.current) { evWsRef.current.close(); evWsRef.current = null; }
+              if (statsIntervalRef.current) { clearInterval(statsIntervalRef.current); statsIntervalRef.current = null; }
+              if (isErr) {
+                try {
+                  const logs = await apiFetch("GET", "/execution/logs/" + s.id + "?tail=15");
+                  const lines = logs.lines ?? (Array.isArray(logs) ? logs : []);
+                  const errLine = [...lines].reverse().find(l => /Error|Exception|Traceback/i.test(l));
+                  showToast(errLine ? errLine.slice(0, 80) : "Engine crashed — check logs", false);
+                } catch { showToast("Engine crashed — check logs", false); }
+              } else { showToast("Pipeline finished"); }
+            } else {
+              showToast(`${s.name}: ${isErr ? "crashed" : "finished"}`, !isErr);
+            }
+          }
+        } catch {}
+      }
     }, 3000);
     return () => clearInterval(t);
-  }, [running, sessionId]);
+  }, [allSessions, sessionId]);
+
+  // Poll system resource info while any session is running
+  useEffect(() => {
+    if (!allSessions.length) { setSysInfo(null); return; }
+    const fetchSys = async () => {
+      try {
+        const r = await fetch(API + "/system/info");
+        if (r.ok) setSysInfo(await r.json());
+      } catch {}
+    };
+    fetchSys();
+    const t = setInterval(fetchSys, 5000);
+    return () => clearInterval(t);
+  }, [allSessions.length]);
 
   // Dirty tracking
   useEffect(() => { setDirty(true); }, [nodes, edges]);
+
+  // Merge live stats into node data at render time (pure view transform — does not mutate state)
+  const displayNodes = useMemo(() => {
+    if (Object.keys(nodeStats).length === 0) return nodes;
+    return nodes.map(n => {
+      const s = nodeStats[n.id];
+      return s ? { ...n, data: { ...n.data, liveStats: s } } : n;
+    });
+  }, [nodes, nodeStats]);
 
   // Auto-save draft every 30s
   useEffect(() => {
@@ -3878,6 +3510,8 @@ function App() {
     _id = 0; snapshot();
     setNodes([]); setEdges([]);
     setName("Untitled"); setPid(null); setSelId(null); setDirty(false);
+    // Detach primary session tracking (session keeps running in background)
+    setRunning(false); setSid(null); setNodeStats({});
     showToast("New pipeline");
   }, [dirty, nodes, snapshot, setNodes, setEdges, showToast]);
 
@@ -3893,6 +3527,8 @@ function App() {
     _id = 0; snapshot();
     setNodes(s.nodes); setEdges(s.edges); setName(s.name);
     setPid(null); setSelId(null); setShowSamples(false); setDirty(true);
+    // Detach primary session — any running session keeps going in the sessions bar
+    setRunning(false); setSid(null); setNodeStats({});
     setTimeout(() => fitView({ padding: 0.15, duration: 400 }), 50);
     showToast("Loaded: " + s.name);
   };
@@ -3900,7 +3536,7 @@ function App() {
   const _toRFNodes = (raw) => (raw ?? []).map(n => ({
     id: n.id, type: n.type,
     position: n.position ?? { x: 0, y: 0 },
-    data: n.data ?? { label: n.label, config: n.config ?? {} },
+    data: n.data ?? { label: n.label, config: n.config ?? {}, resources: n.resources ?? {} },
   }));
   const _toRFEdges = (raw) => (raw ?? []).map(e => ({
     id: e.id, source: e.source, target: e.target,
@@ -3920,7 +3556,7 @@ function App() {
   const handleExport = () => {
     const payload = {
       version: "1.0", name,
-      nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.data.label, position: n.position, config: n.data.config ?? {} })),
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.data.label, position: n.position, config: n.data.config ?? {}, resources: n.data.resources ?? {} })),
       edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? "out", targetHandle: e.targetHandle ?? "in" })),
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
@@ -3953,7 +3589,7 @@ function App() {
   const save = async () => {
     const payload = {
       version: "1.0", name,
-      nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.data.label, position: n.position, config: n.data.config ?? {} })),
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, label: n.data.label, position: n.position, config: n.data.config ?? {}, resources: n.data.resources ?? {} })),
       edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle ?? "out", targetHandle: e.targetHandle ?? "in" })),
     };
     try {
@@ -3968,15 +3604,45 @@ function App() {
     } catch (e) { showToast("Save failed: " + e.message, false); return null; }
   };
 
+
+  const handleUseModel = (model) => {
+    const ports = {
+      inputs:  (model.ports?.inputs  ?? []).map(p => ({ id: p.name, label: p.name })),
+      outputs: (model.ports?.outputs ?? []).map(p => ({ id: p.name, label: p.name })),
+    };
+    if (!ports.inputs.length)  ports.inputs  = [{ id: "in",  label: "in"  }];
+    if (!ports.outputs.length) ports.outputs = [{ id: "out", label: "out" }];
+
+    snapshot();
+    const nid = `model_node_${uid()}`;
+    setNodes(ns => [...ns, {
+      id: nid,
+      type: "model_node",
+      position: { x: 300 + Math.random() * 200, y: 200 + Math.random() * 100 },
+      data: {
+        label: `${model.name} v${model.version}`,
+        config: { model_id: model.id, mode: "loop" },
+        ports
+      }
+    }]);
+    setDirty(true);
+    addRecent("model_node");
+    setShowModels(false);
+    showToast("Added model to pipeline");
+  };
+
   const startRun = async () => {
     let pid = pipelineId ?? await save();
     if (!pid) return;
     try {
       const r = await apiFetch("POST", "/execution/start", { pipeline_id: pid });
-      setSid(r.session_id); setRunning(true); setNodeDataMap({}); setNodeVizMap({});
-      showToast("Started");
+      const sid = r.session_id;
+      const wsPort = r.ws_port ?? 8765;
+      setSid(sid); setRunning(true); setNodeDataMap({}); setNodeVizMap({}); setNodeStats({});
+      setAllSessions(prev => [...prev.filter(s => s.id !== sid), { id: sid, name, wsPort }]);
+      showToast("Session " + sid.slice(0, 8) + " started");
       if (evWsRef.current) evWsRef.current.close();
-      const ws = new WebSocket(`ws://localhost:8765/ws/events/${r.session_id}`);
+      const ws = new WebSocket(`ws://localhost:${wsPort}/ws/events/${sid}`);
       ws.onmessage = e => {
         try {
           const msg = JSON.parse(e.data);
@@ -3997,6 +3663,18 @@ function App() {
         } catch {}
       };
       evWsRef.current = ws;
+      if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
+      const statsInterval = setInterval(async () => {
+        try {
+          const sr = await apiFetch("GET", "/execution/stats/" + sid);
+          if (sr?.nodes && typeof sr.nodes === "object") {
+            setNodeStats(sr.nodes);
+            setAllSessionStats(prev => ({ ...prev, [sid]: sr.nodes }));
+          }
+        } catch {}
+      }, 3000);
+      statsIntervalRef.current = statsInterval;
+      sessionMapRef.current.set(sid, { ws, statsInterval });
     } catch (e) { showToast("Start failed: " + e.message, false); }
   };
 
@@ -4006,13 +3684,35 @@ function App() {
     await startRun();
   };
 
-  const stop = async () => {
-    if (!sessionId) return;
+  const stop = async (targetSid) => {
+    const sid = targetSid ?? sessionId;
+    if (!sid) return;
     try {
-      await apiFetch("POST", "/execution/stop/" + sessionId);
-      setRunning(false); setSid(null);
-      if (evWsRef.current) { evWsRef.current.close(); evWsRef.current = null; }
-      showToast("Stopped");
+      const refs = sessionMapRef.current.get(sid);
+      if (refs) {
+        if (refs.ws) refs.ws.close();
+        if (refs.statsInterval) clearInterval(refs.statsInterval);
+        sessionMapRef.current.delete(sid);
+      }
+      if (sid === sessionId) {
+        if (statsIntervalRef.current) { clearInterval(statsIntervalRef.current); statsIntervalRef.current = null; }
+        if (evWsRef.current) { evWsRef.current.close(); evWsRef.current = null; }
+      }
+      let summaryMsg = "Stopped";
+      try {
+        const finalStats = await apiFetch("GET", "/execution/stats/" + sid);
+        const nodes_ = finalStats?.nodes ?? {};
+        const vals = Object.values(nodes_);
+        if (vals.length > 0) {
+          const avgFps = vals.reduce((s, n) => s + (n.fps || 0), 0) / vals.length;
+          summaryMsg = `Stopped · ${avgFps.toFixed(1)} fps avg · ${vals.length} nodes`;
+        }
+      } catch {}
+      await apiFetch("POST", "/execution/stop/" + sid);
+      setAllSessions(prev => prev.filter(s => s.id !== sid));
+      setAllSessionStats(prev => { const n = {...prev}; delete n[sid]; return n; });
+      if (sid === sessionId) { setRunning(false); setSid(null); setNodeStats({}); }
+      showToast(summaryMsg);
     } catch (e) { showToast("Stop failed: " + e.message, false); }
   };
 
@@ -4057,7 +3757,7 @@ function App() {
       .map(g => ({ ...g, types: g.types.filter(t => t !== type) }))
       .filter(g => g.types.length > 0 || BASE_GROUPS.some(bg => bg.label === g.label))
     );
-    showToast("Đã xóa template");
+    showToast("ÄÃ£ xÃ³a template");
   };
 
   const btn = (variant, disabled) => ({
@@ -4126,6 +3826,7 @@ function App() {
         ${divider}
 
         <button style=${btn("def")} onClick=${() => setShowModels(true)} title="Model Hub">🧠 Models</button>
+        <button style=${btn("def")} onClick=${() => setShowDataHub(true)} title="Data Hub">🗄️ Data Hub</button>
         ${running && html`
           <button style=${{ ...btn("def"), position: "relative" }} onClick=${() => setShowSeenLog(true)} title="Seen Faces log">
             📋 Faces
@@ -4150,10 +3851,10 @@ function App() {
         <div style=${{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
           <div style=${{ display: "flex", alignItems: "center", gap: 5, fontSize: 11 }}>
             <div style=${{ width: 7, height: 7, borderRadius: "50%",
-                            background: running ? "#3fb950" : "#8b949e",
-                            animation: running ? "blink 1.8s infinite" : "none" }} />
-            <span style=${{ color: running ? "#3fb950" : "#8b949e" }}>
-              ${running ? (sessionId?.slice(0, 8) + "…") : "Idle"}
+                            background: allSessions.length ? "#3fb950" : "#8b949e",
+                            animation: allSessions.length ? "blink 1.8s infinite" : "none" }} />
+            <span style=${{ color: allSessions.length ? "#3fb950" : "#8b949e" }}>
+              ${allSessions.length > 1 ? `${allSessions.length} sessions` : allSessions.length === 1 ? (allSessions[0].id.slice(0, 8) + "…") : "Idle"}
             </span>
           </div>
           <button onClick=${() => setShowShortcuts(true)} title="Keyboard shortcuts (?)"
@@ -4166,14 +3867,24 @@ function App() {
         </div>
       </div>
 
+      <${SessionsBar} sessions=${allSessions} stats=${allSessionStats} onStop=${stop} primarySid=${sessionId} />
+
       <!-- BODY -->
       <div style=${{ display: "flex", flex: 1, overflow: "hidden" }}>
         <${Palette} groups=${groups} onAddCustom=${() => setShowCustomNode(true)} onDeleteTemplate=${deleteCustomNode} />
 
         <div style=${{ flex: 1, position: "relative" }}>
           <${ReactFlow}
-            nodes=${nodes} edges=${edges}
-            onNodesChange=${(chg) => { onNodesChange(chg); }}
+            nodes=${displayNodes} edges=${edges}
+            onNodesChange=${(changes) => {
+              onNodesChange(changes);
+              const hasDataChange = changes.some(c => 
+                c.type !== "position" && 
+                c.type !== "dimensions" && 
+                c.type !== "select"
+              );
+              if (hasDataChange) setDirty(true);
+            }}
             onEdgesChange=${onEdgesChange}
             onConnect=${onConnect}
             nodeTypes=${nodeTypes}
@@ -4223,6 +3934,7 @@ function App() {
             <${PropertiesPanel} node=${selNode} onUpdate=${onUpdate} onDuplicate=${duplicateNode}
               sessionId=${running ? sessionId : null} running=${running}
               nodeDataMap=${nodeDataMap} nodeVizMap=${nodeVizMap}
+              nodeStats=${nodeStats} sysInfo=${sysInfo}
               onEditCode=${() => selNode?.type === "python_node" && setCodeEditId(selNode.id)}
               onSaveNode=${() => selNode?.type === "python_node" && setSaveNodeTarget(selNode)} />
           </div>
@@ -4242,7 +3954,8 @@ function App() {
 
       <!-- MODALS -->
       ${showOpen       && html`<${OpenModal}        onLoad=${loadPipeline} onClose=${() => setShowOpen(false)} />`}
-      ${showModels     && html`<${ModelHubModal}    onClose=${() => setShowModels(false)} />`}
+      ${showDataHub    && html`<${DataHubPanel} onClose=${() => setShowDataHub(false)} />`}
+      ${showModels     && html`<${ModelHubModal}    onClose=${() => setShowModels(false)} onUseModel=${handleUseModel} />`}
       ${showCustomNode && html`<${CustomNodeModal}  onClose=${() => setShowCustomNode(false)} onSave=${saveCustomNode} currentNodes=${nodes} currentEdges=${edges} />`}
       ${showShortcuts  && html`<${ShortcutsModal}   onClose=${() => setShowShortcuts(false)} />`}
       ${showQuickAdd   && html`<${QuickAddModal}    onClose=${() => setShowQuickAdd(false)} onAdd=${quickAddNode} />`}

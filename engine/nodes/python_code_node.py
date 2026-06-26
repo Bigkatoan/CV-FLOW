@@ -36,6 +36,7 @@ import numpy as np
 
 from engine.nodes.base import BaseNode
 from engine.core.frame_context import FrameContext
+from engine.streaming import ws_server
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +124,7 @@ class PythonCodeNode(BaseNode):
         self._error_count   = 0
         self._last_fps_t    = time.monotonic()
         self._fps           = 0.0
+        self._current_ctx: FrameContext | None = None
 
         mode       = config.get("mode", "loop")
         active_key = config.get("active_key", "active")
@@ -167,10 +169,35 @@ class PythonCodeNode(BaseNode):
         def _button(name: str, **_):
             pass  # no-op at runtime; only the label matters for the UI
 
+        def _send_frame(img, quality: int = 80) -> None:
+            """Broadcast a frame JPEG to the frontend stream viewer."""
+            if self._current_ctx is None:
+                return
+            try:
+                if isinstance(img, np.ndarray):
+                    ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+                    if ok:
+                        ws_server.send_frame(self._current_ctx.session_id, buf.tobytes())
+                elif isinstance(img, (bytes, bytearray)):
+                    ws_server.send_frame(self._current_ctx.session_id, bytes(img))
+            except Exception as exc:
+                logger.debug("send_frame error in node %s: %s", node_id, exc)
+
+        def _send_event(event: dict) -> None:
+            """Push a custom event dict to the frontend WebSocket."""
+            if self._current_ctx is None:
+                return
+            try:
+                ws_server.send_event(self._current_ctx.session_id, event)
+            except Exception as exc:
+                logger.debug("send_event error in node %s: %s", node_id, exc)
+
         # Execute user code in an isolated namespace
         ns: dict[str, Any] = {
             "show_image":   _show_image,
             "show_text":    _show_text,
+            "send_frame":   _send_frame,
+            "send_event":   _send_event,
             "config":       config,
             "slider":       _slider,
             "checkbox":     _checkbox,
@@ -234,6 +261,7 @@ class PythonCodeNode(BaseNode):
         return self._latest_viz
 
     def process(self, ctx: FrameContext) -> FrameContext:
+        self._current_ctx = ctx   # expose to send_frame / send_event helpers
         self._latest_viz = []  # clear for this frame
         args = [_route_input(p, ctx) for p in self._input_params]
         try:

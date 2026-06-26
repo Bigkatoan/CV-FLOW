@@ -11,6 +11,7 @@ class ExecutionStartRequest(BaseModel):
 
 class ExecutionStartResponse(BaseModel):
     session_id: str
+    ws_port: int = 8765
 
 
 class SessionStatusResponse(BaseModel):

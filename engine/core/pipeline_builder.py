@@ -12,8 +12,95 @@ import logging
 from engine.nodes.base import BaseNode
 from engine.nodes.python_code_node import PythonCodeNode
 from engine.nodes.cpp.cpp_node import CppCodeNode
+from engine.core.node_registry import get_node_class, get_registry
+import importlib
+import pkgutil
+import textwrap
 
 logger = logging.getLogger(__name__)
+
+_NODES_DISCOVERED = False
+
+def _ensure_nodes_discovered() -> None:
+    """Lazy import all engine node modules once to populate @register registry."""
+    global _NODES_DISCOVERED
+    if _NODES_DISCOVERED:
+        return
+    import engine.nodes
+    for finder, mod_name, ispkg in pkgutil.walk_packages(
+        path=engine.nodes.__path__,
+        prefix="engine.nodes.",
+        onerror=lambda x: None,
+    ):
+        try:
+            importlib.import_module(mod_name)
+        except Exception as e:
+            logger.debug("Node discovery: failed to import %s: %s", mod_name, e)
+    _NODES_DISCOVERED = True
+    logger.info("Node registry populated: %d types", len(get_registry()))
+
+def _build_model_node(node_id: str, config: dict) -> PythonCodeNode | None:
+    """Generate a PythonCodeNode wrapper for an ONNX model inference."""
+    model_id = config.get("model_id")
+    if not model_id:
+        logger.warning("model_node %r missing model_id", node_id)
+        return None
+    
+    ports_json = config.get("ports", {})
+    inputs = ports_json.get("inputs", [])
+    outputs = ports_json.get("outputs", [])
+    
+    # Auto-generate python code for the node
+    code = [
+        "import onnxruntime as ort",
+        "import os",
+        "from pathlib import Path",
+        "",
+        "session = None",
+        "",
+        "def setup():",
+        "    global session",
+        f'    model_dir = Path(os.environ.get("CVFLOW_MODELS_DIR", "."))',
+        f'    model_path = model_dir / "{model_id}"',
+        '    if not model_path.exists():',
+        f'        raise FileNotFoundError(f"Model file not found: {{model_path}}")',
+        '    # Fallback to CPU if CUDA/TensorRT not available',
+        '    providers = ["TensorrtExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider"]',
+        '    session = ort.InferenceSession(str(model_path), providers=providers)',
+        "",
+        "def process(ctx):",
+        "    # Prepare inputs",
+        "    ort_inputs = {}",
+    ]
+    
+    for inp in inputs:
+        # ctx.get('port_name') defaults to None
+        code.append(f'    val_{inp["name"]} = ctx.get("{inp["name"]}")')
+        code.append(f'    if val_{inp["name"]} is not None:')
+        code.append(f'        ort_inputs["{inp["tensor_name"]}"] = val_{inp["name"]}')
+        
+    code.append("")
+    code.append("    if not ort_inputs:")
+    code.append("        return  # No inputs ready")
+    code.append("")
+    code.append("    # Run inference")
+    out_names = [out["tensor_name"] for out in outputs]
+    code.append(f'    ort_outs = session.run({out_names}, ort_inputs)')
+    code.append("")
+    code.append("    # Map outputs back to FrameContext")
+    
+    for i, out in enumerate(outputs):
+        code.append(f'    ctx.set("{out["name"]}", ort_outs[{i}])')
+        
+    code_str = "\n".join(code)
+    
+    # Create a PythonCodeNode and inject the generated code
+    config_copy = dict(config)
+    config_copy["code"] = code_str
+    
+    instance = PythonCodeNode()
+    # We delay calling setup() until build_pipeline loop
+    return instance
 
 # Frontend-only marker types — never instantiated in the engine
 _MARKER_TYPES = {"pipeline_output", "pipeline_input"}
@@ -115,6 +202,9 @@ def build_pipeline(pipeline_json: dict[str, Any]) -> list[BaseNode]:
     Raises ValueError if the graph has cycles or references unknown node types.
     Template nodes (type starts with 'tmpl_') are expanded inline before sorting.
     """
+    _ensure_nodes_discovered()
+    _registered = get_registry()
+    
     pipeline_json = _expand_templates(pipeline_json)
     nodes_data: list[dict] = pipeline_json.get("nodes", [])
     edges_data: list[dict] = pipeline_json.get("edges", [])
@@ -161,10 +251,16 @@ def build_pipeline(pipeline_json: dict[str, Any]) -> list[BaseNode]:
             instance = PythonCodeNode()
         elif node_type == "cpp_node":
             instance = CppCodeNode()
+        elif node_type == "model_node":
+            instance = _build_model_node(nid, node_config)
+            if instance is None:
+                continue
+        elif node_type in _registered:
+            klass = get_node_class(node_type)
+            instance = klass()
         else:
             logger.warning(
-                "Unknown node type %r (node %s) — skipping. "
-                "Only 'python_node' and 'cpp_node' are supported.",
+                "Unknown node type %r (node %s) — skipping. ",
                 node_type, nid,
             )
             continue

@@ -32,7 +32,8 @@ async def start_pipeline(body: ExecutionStartRequest, db: AsyncSession = Depends
     except Exception as e:
         raise HTTPException(500, f"Failed to start engine: {e}")
 
-    return ExecutionStartResponse(session_id=session_id)
+    meta = execution_service.session_meta(session_id)
+    return ExecutionStartResponse(session_id=session_id, ws_port=meta.get("ws_port", settings.engine_ws_port))
 
 
 @router.post("/stop/{session_id}", status_code=200)

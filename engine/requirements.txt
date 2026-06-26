@@ -1,9 +1,12 @@
 opencv-python==4.10.0.84
 numpy==1.26.4
 onnxruntime==1.18.1
-# onnxruntime-gpu==1.18.1  # Uncomment for CUDA support
+# onnxruntime-gpu==1.18.1  # Uncomment for CUDA inference (SCRFD + MobileFaceNet GPU nodes)
+# torch>=2.0.0              # Optional: GPU affine warp in crop node; install with CUDA build
 websockets==12.0
 httpx==0.27.0
 paho-mqtt==2.1.0
 # deep-sort-realtime==1.3.2   # Phase 5: tracking
 # bytetracker==0.1.0          # Phase 5: tracking
+onnx>=1.15.0
+pytest>=8.0.0

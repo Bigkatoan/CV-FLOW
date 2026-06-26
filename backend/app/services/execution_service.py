@@ -1,26 +1,43 @@
-"""Manages engine subprocess lifecycle."""
+"""Manages engine subprocess lifecycle.
+
+Thread safety: a module-level threading.Lock protects _sessions and _meta
+dicts from race conditions when concurrent API calls hit start/stop.
+
+DB persistence: execution_db.py (sync sqlite3) is called OUTSIDE the lock
+to avoid blocking other requests during I/O.
+"""
+from __future__ import annotations
+
 import json
+import logging
 import os
 import subprocess
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
 from app.config import settings
 
+logger = logging.getLogger(__name__)
+
 # session_id → subprocess.Popen
 _sessions: dict[str, subprocess.Popen] = {}
-# session_id → metadata
+# session_id → metadata dict
 _meta: dict[str, dict] = {}
+
+# Lock protecting _sessions and _meta
+_lock = threading.Lock()
 
 
 def get_running_sessions() -> dict[str, subprocess.Popen]:
-    return _sessions
+    with _lock:
+        return dict(_sessions)
 
 
-def _kill_all_running() -> None:
-    """Terminate every running engine process so the WS port is free."""
+def _kill_all_running_locked() -> None:
+    """Terminate every running engine process. MUST be called with _lock held."""
     for sid, proc in list(_sessions.items()):
         if proc.poll() is None:
             proc.terminate()
@@ -38,79 +55,117 @@ def start_session(
     params_override: dict | None = None,
     mode: str = "sequential",
 ) -> subprocess.Popen:
-    # In sequential mode only one engine can own the WS port — kill stale sessions.
-    # In multiprocess mode each session gets a separate port, so we allow concurrency.
-    if mode == "sequential":
-        _kill_all_running()
+    """Start a new engine subprocess.
 
+    In sequential mode only one engine can own the WS port — kills stale sessions.
+    In multiprocess mode each session gets a separate port (base + active_count).
+    """
     settings.pipelines_tmp_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = settings.pipelines_tmp_dir / f"{session_id}.json"
     tmp_path.write_text(json.dumps(pipeline_json))
 
-    # Write engine stdout+stderr to a log file so iter_logs() can read it.
-    # Using PIPE and never draining it causes a pipe-buffer deadlock for long runs.
-    log_path = settings.pipelines_tmp_dir / f"{session_id}.log"
-    log_file = open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")  # line-buffered
+    log_path   = settings.pipelines_tmp_dir / f"{session_id}.log"
+    stats_path = settings.pipelines_tmp_dir / f"{session_id}.stats.json"
+
+    log_file = open(log_path, "w", buffering=1, encoding="utf-8", errors="replace")
 
     engine_main = Path(__file__).parent.parent.parent.parent / "engine" / "main.py"
 
-    # Assign a unique WS port: base + number of currently active sessions
-    active_count = sum(1 for p in _sessions.values() if p.poll() is None)
-    ws_port = settings.engine_ws_port + (active_count if mode != "sequential" else 0)
+    with _lock:
+        # Never auto-kill — every pipeline gets its own port; user stops sessions explicitly
+        active_count = sum(1 for p in _sessions.values() if p.poll() is None)
+        ws_port = settings.engine_ws_port + active_count
 
-    cmd = [
-        settings.engine_python, str(engine_main),
-        "--pipeline-json", str(tmp_path),
-        "--session-id", session_id,
-        "--ws-port", str(ws_port),
-        "--mode", mode,
-    ]
-    if params_override:
-        cmd += ["--params-override", json.dumps(params_override)]
+        engine_env = {
+            **os.environ,
+            "CVFLOW_MODELS_DIR":   str(settings.models_dir),
+            "CVFLOW_COMPILED_DIR": str(settings.compiled_dir),
+            "CVFLOW_STATS_PATH":   str(stats_path),
+            "CVFLOW_SESSION_ID":   session_id,   # used by BenchmarkNode for file naming
+        }
 
-    stats_path = settings.pipelines_tmp_dir / f"{session_id}.stats.json"
+        cmd = [
+            settings.engine_python, str(engine_main),
+            "--pipeline-json", str(tmp_path),
+            "--session-id",    session_id,
+            "--ws-port",       str(ws_port),
+            "--mode",          mode,
+        ]
+        if params_override:
+            cmd += ["--params-override", json.dumps(params_override)]
 
-    # Pass storage paths to the engine subprocess via environment variables
-    # so engine nodes don't need to import from the backend `app` package.
-    engine_env = {
-        **os.environ,
-        "CVFLOW_MODELS_DIR":   str(settings.models_dir),
-        "CVFLOW_COMPILED_DIR": str(settings.compiled_dir),
-        "CVFLOW_STATS_PATH":   str(stats_path),
-    }
+        proc = subprocess.Popen(cmd, stdout=log_file, stderr=log_file, env=engine_env)
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=log_file,
-        stderr=log_file,
-        env=engine_env,
-    )
-    _sessions[session_id] = proc
-    _meta[session_id] = {
-        "pipeline_id": pipeline_json.get("id", ""),
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "log_path": str(log_path),
-        "stats_path": str(stats_path),
-        "ws_port": ws_port,
-    }
+        _sessions[session_id] = proc
+        _meta[session_id] = {
+            "pipeline_id": pipeline_json.get("id", ""),
+            "started_at":  datetime.now(timezone.utc).isoformat(),
+            "log_path":    str(log_path),
+            "stats_path":  str(stats_path),
+            "ws_port":     ws_port,
+            "mode":        mode,
+        }
+
+    # DB write outside lock — non-blocking, no deadlock risk
+    try:
+        from app.services.execution_db import insert_session
+        insert_session(session_id, pipeline_json.get("id", ""), mode=mode)
+    except Exception as exc:
+        logger.warning("execution_db.insert_session failed: %s", exc)
+
     return proc
 
 
 def stop_session(session_id: str) -> bool:
-    proc = _sessions.get(session_id)
-    if not proc:
-        return False
-    proc.terminate()
+    """Stop a running session, flush stats to DB, clean up state."""
+    with _lock:
+        proc = _sessions.get(session_id)
+        if not proc:
+            return False
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        rc = proc.returncode
+        meta = _meta.pop(session_id, {})
+        _sessions.pop(session_id, None)
+
+    # Determine status
+    if rc is None or rc == 0:
+        status = "stopped"
+    else:
+        status = "error"
+
+    # Read stats file and persist node metrics
+    stats_path = Path(meta.get("stats_path", ""))
+    frame_count = 0
     try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    _sessions.pop(session_id, None)
+        from app.services.execution_db import update_session_stopped, insert_node_metrics
+        metrics: dict = {}
+        if stats_path.exists():
+            try:
+                metrics = json.loads(stats_path.read_text())
+                # frame_count: sum of frame counts if present, else max fps * rough duration
+                frame_count = max(
+                    (int(m.get("frame_count", 0)) for m in metrics.values()),
+                    default=0,
+                )
+            except Exception as exc:
+                logger.warning("Failed to read stats file %s: %s", stats_path, exc)
+
+        if metrics:
+            insert_node_metrics(session_id, metrics)
+        update_session_stopped(session_id, status, frame_count=frame_count)
+    except Exception as exc:
+        logger.warning("execution_db.stop_session DB update failed: %s", exc)
+
     return True
 
 
 def session_status(session_id: str) -> str:
-    proc = _sessions.get(session_id)
+    with _lock:
+        proc = _sessions.get(session_id)
     if not proc:
         return "stopped"
     rc = proc.poll()
@@ -120,14 +175,16 @@ def session_status(session_id: str) -> str:
 
 
 def session_meta(session_id: str) -> dict:
-    return _meta.get(session_id, {})
+    with _lock:
+        return dict(_meta.get(session_id, {}))
 
 
 def iter_logs(session_id: str, tail: int = 200) -> Iterator[str]:
     """Read last `tail` lines from the engine log file."""
-    log_path = Path(_meta.get(session_id, {}).get("log_path", ""))
+    with _lock:
+        meta = dict(_meta.get(session_id, {}))
+    log_path = Path(meta.get("log_path", ""))
     if not log_path.exists():
-        # Fallback: try the conventional path
         log_path = settings.pipelines_tmp_dir / f"{session_id}.log"
     if not log_path.exists():
         yield "(no log file yet — engine may still be starting)"
