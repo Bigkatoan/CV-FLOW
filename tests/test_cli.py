@@ -31,7 +31,7 @@ def test_package_exports():
     assert hasattr(cv_flow, "Topic")
     assert hasattr(cv_flow, "load_topics")
     assert hasattr(cv_flow, "get_topic")
-    assert cv_flow.__version__ == "0.2.0"
+    assert cv_flow.__version__ == "0.3.0"
 
 
 # ── cv-flow validate ──────────────────────────────────────────────────────────
