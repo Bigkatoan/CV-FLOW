@@ -19,6 +19,12 @@ build/
 *.db
 *.sqlite3
 
+# Large model fixtures — regenerate with the command in
+# tests/nodes/test_inference.py's skip message instead of committing binaries.
+tests/fixtures/*.onnx
+.trt_cache/
+*.trt_cache/
+
 # Editor / OS
 .vscode/
 .idea/

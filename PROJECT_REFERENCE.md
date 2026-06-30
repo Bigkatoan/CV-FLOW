@@ -1,10 +1,17 @@
 # CV-FLOW — Project Reference
 
-Tài liệu tổng hợp: changelog, kiến trúc hiện tại, hướng dẫn sử dụng, nguyên tắc viết code, và những gì chưa được kiểm thử.
+Tài liệu tổng hợp: kiến trúc hiện tại, hướng dẫn sử dụng, nguyên tắc viết code, và những gì chưa được kiểm thử.
+
+> Changelog đã chuyển sang [`CHANGELOG.md`](CHANGELOG.md) (chuẩn Keep a Changelog).
+> README hướng tới người dùng package nằm ở [`README.md`](README.md). Tài liệu
+> hướng tới AI agent (Claude) dùng package này trong dự án khác nằm ở
+> [`CLAUDE.md`](CLAUDE.md). File này (`PROJECT_REFERENCE.md`) là tài liệu kiến
+> trúc/nguyên tắc nội bộ — phần changelog dưới đây giữ nguyên cho bối cảnh lịch
+> sử của bản v0.2.0 rewrite, các thay đổi sau đó xem `CHANGELOG.md`.
 
 ---
 
-## 1. Changelog
+## 1. Changelog (lịch sử — xem CHANGELOG.md cho các bản sau v0.2.0)
 
 ### v0.2.0 — 2026-06-30 — Viết lại toàn bộ theo mô hình Topic-based DAM
 
@@ -67,6 +74,7 @@ cv_flow/
 │   ├── inference.py          OnnxInference, YoloInference
 │   ├── postprocess.py        NMS (pure-numpy)
 │   ├── tracking.py           ObjectTracker (ByteTrackLite — IOU tracker thuần Python)
+│   ├── tee.py                 Tee — fan-out 1 topic ra N topic (xem mục 4.10)
 │   ├── draw.py               DrawBbox (cv2)
 │   └── output.py             VideoWriter, StreamViewer (websocket), MqttPublisher
 └── topic_templates/        # 10 file .topic mẫu: camera_frame, depth_frame, yolo_input,
@@ -76,7 +84,9 @@ cv_flow/
 backend/app/
 ├── main.py                 FastAPI app, mount toàn bộ router
 ├── schemas.py               Pydantic models: TopicSpec, NodeSpec, PipelineSpec, ValidationResult
-├── pipeline_store.py        Lưu trữ pipeline — TRONG MEMORY (dict, thread-safe), KHÔNG persist khi restart
+├── db.py                    SQLAlchemy engine + bảng `pipelines` (JSON blob theo id)
+├── pipeline_store.py        PipelineStore — SQLite thật (kể từ v0.3.0), survive restart.
+│                            Interface (create/get/update/delete/list_all/clear) không đổi.
 ├── validator.py             validate_pipeline() — kiểm tra node type, topic reference, required params
 ├── guide_generator.py       generate_deployment_guide() — PipelineSpec → Markdown
 └── api/
@@ -85,27 +95,36 @@ backend/app/
     ├── pipeline.py            POST/GET/PUT/DELETE /api/pipeline[/{id}], POST /api/pipeline/validate
     └── guide.py               POST /api/pipeline/generate-guide
 
-tests/                       # mirror cấu trúc cv_flow/ — 143 tests tổng (139 pass + 4 skip GPU)
-├── dam/        (23 tests)
-├── topic/      (45 tests)
-├── nodes/      (22 tests)
-├── backend/    (22 tests)
-└── test_*.py ở root (31 tests): catalog, cli, executor, node
+scripts/
+├── bench_inference.py       Benchmark thủ công CPU/CUDA/TensorRT latency (không phải pytest)
+└── smoke_pipeline.py        Smoke test thủ công full pipeline trên hardware thật (không phải pytest)
+
+tests/                       # mirror cấu trúc cv_flow/ — xem CHANGELOG.md cho số lượng test mới nhất
+├── dam/
+├── topic/
+├── nodes/        (gồm cả test_inference.py, test_camera.py, test_tee.py — dùng model/camera thật)
+├── backend/      (gồm test_pipeline_store.py — test persistence SQLite thật)
+├── conftest.py   pytest_configure() trỏ DB pipeline_store sang file tạm cho cả phiên test
+└── test_*.py ở root: catalog, cli, executor, node
 ```
 
 **Chưa có / nằm ngoài phạm vi đã build:**
 - Không có frontend UI kéo-thả thực sự (chỉ có backend API phục vụ cho UI đó).
 - Không có runtime C++ (CPU/GPU) — yêu cầu gốc có nhắc tới multi-runtime (numpy / torch+pycuda / C++ CPU / C++ GPU) nhưng hiện tại **chỉ có runtime Python (numpy / torch)**.
-- `backend` khai báo dependency `sqlalchemy` + `aiosqlite` trong `pyproject.toml` nhưng **chưa dùng** — pipeline store hiện là in-memory dict, mất dữ liệu khi restart server.
+- CUDA IPC zero-copy thật (`CudaPortBus`) và elastic multiprocessing thật (`Executor.scale_up/scale_down`) — kế hoạch ở Phase 2 (xem CHANGELOG.md, sẽ lên v0.4.0).
 
 ---
 
 ## 3. Hướng dẫn sử dụng
 
 ### Cài đặt & chạy test
+Trên máy Jetson hiện tại, môi trường dùng là `/home/orin/venv` (không phải venv riêng trong repo)
+— xem [`README.md`](README.md) mục "Install → On a Jetson" cho lý do và lệnh cài đặt đầy đủ
+(`include-system-site-packages=true`, `pip install -e . --no-deps`, ghim `numpy<2`). Tóm tắt:
+
 ```bash
-source venv/bin/activate
-python -m pytest tests/ -v          # chạy toàn bộ test suite
+/home/orin/venv/bin/python3 -m pytest tests/ -v          # chạy toàn bộ test suite
+/home/orin/venv/bin/python3 -m pytest tests/ -m "not gpu" # bỏ qua test build TensorRT engine (chậm)
 ```
 > Lưu ý: máy này có ROS2 Humble cài global, plugin pytest của nó sẽ làm crash pytest nếu thiếu 2 chỗ fix đã có sẵn trong `pyproject.toml` (`addopts` disable plugin) và venv (`pip install lark`). Không cần set `AMENT_PREFIX_PATH` hay biến môi trường nào khác.
 
@@ -191,24 +210,27 @@ cv-flow run launch.py           # chạy script launch (gọi Executor.spin())
 7. **Không thêm abstraction/feature ngoài yêu cầu**: không tạo class trừu tượng hoá sớm, không viết fallback cho trường hợp không thể xảy ra trong code nội bộ.
 8. **FastAPI**: mọi endpoint `DELETE` với `status_code=204` phải có `response_model=None` (bug riêng của FastAPI 0.111.0 đang dùng trong venv này).
 9. **Không sửa lại `pyproject.toml`'s `addopts` (ROS2 plugin disable list)** trừ khi thật sự cần thêm plugin mới — đây là fix cho môi trường máy chủ, không phải config tuỳ chọn.
+10. **Mỗi topic/bus chỉ có 1 reader thật sự** (FIFO, read cursor nằm trong shared-memory header, dùng chung cho mọi `Subscriber` cùng tên bus): nếu 2 node khác nhau cần cùng 1 dữ liệu nguồn (vd cả `Preprocess` lẫn `DrawBbox` đều cần frame gốc), **không** cho cả 2 cùng `subscribe()` 1 topic — chúng sẽ tranh nhau đọc và rớt dữ liệu. Dùng `Tee` (`cv_flow/nodes/tee.py`) để fan-out ra N topic riêng trước. Bug này chỉ lộ ra khi chạy thật nhiều frame liên tục (test với 1 frame đơn lẻ không phát hiện được) — phát hiện qua `scripts/smoke_pipeline.py` trên hardware thật.
 
 ---
 
 ## 5. Những gì CHƯA được test (gaps)
 
+Cập nhật sau Phase 1 (v0.3.0) — đã verify thật trên Jetson Orin Nano: GPU
+(`torch`/`onnxruntime-gpu` thật), `YoloInference`/`OnnxInference` với model
+ONNX thật (CPU/CUDA/TensorRT), `CameraSource` với USB camera thật,
+`PipelineStore` SQLite sống sót qua restart (giả lập). Chi tiết xem
+`CHANGELOG.md` mục `[0.3.0]`. Các mục còn lại dưới đây là gap thật sự còn tồn tại:
+
 | Thành phần | Vì sao chưa test | Mức độ rủi ro |
 |---|---|---|
-| `CudaPortBus` (write/read tensor thật trên GPU) | Máy không có GPU — T-CUDA-02, T-CUDA-03 bị `skip` | Trung bình — logic fallback CPU đã test kỹ, nhưng code path CUDA thật (CUDA IPC handle) chưa từng chạy thật |
-| `Subscriber(output_device="cuda:0")` | Cùng lý do — T-SUB-04 skip | Trung bình |
-| `Publisher.write(torch.Tensor trên cuda)` | T-PUB-06 chỉ test tensor CPU (torch có cài nhưng không có GPU để test nhánh cuda) | Thấp — nhánh CPU đã pass |
-| `CameraSource` (đọc camera USB/V4L2 thật) | Không có camera vật lý trong môi trường CI/dev này | Cao — chưa từng chạy với hardware thật, chỉ review code |
-| `RtspSource` (đọc RTSP stream + reconnect logic) | Không có RTSP server để test | Cao — đặc biệt logic reconnect sau khi mất kết nối chưa được verify |
-| `YoloInference` / `OnnxInference` (chạy model ONNX thật) | Không có file `.onnx` mẫu trong repo, chưa viết test với model thật | Cao — chỉ test được `NMS`/`run_nms` postprocessing độc lập với raw tensor giả lập |
+| `CudaPortBus` zero-copy CUDA IPC thật | Hiện tại vẫn round-trip qua CPU RAM dù máy đã có GPU — chưa implement IPC thật (kế hoạch Phase 2/v0.4.0) | Trung bình — fallback CPU hoạt động đúng, nhưng không đạt zero-copy như tên class ngụ ý |
+| `CameraSource(gstreamer_pipeline=...)` với camera CSI vật lý | Board chưa gắn module cảm biến CSI lúc build — chỉ test được chuỗi pipeline sinh ra đúng cú pháp (`build_nvargus_pipeline`), chưa mở camera CSI thật | Trung bình — code đã review kỹ theo cú pháp nvarguscamerasrc chuẩn, nhưng chưa chạy thật |
+| `RtspSource` reconnect với stream thật | Backoff logic đã test kỹ bằng mock (doubles/caps/resets đúng), nhưng chưa nối với 1 RTSP server thật để xác nhận hành vi qua mất kết nối mạng thật | Trung bình |
 | `StreamViewer` (WebSocket JPEG broadcast) | Chưa viết test có client WebSocket thật kết nối vào, chỉ review logic | Trung bình |
 | `MqttPublisher` | Không có MQTT broker trong môi trường test | Trung bình — code path connect/publish chưa từng chạy thật |
-| `ObjectTracker` qua nhiều frame thực tế (video dài, occlusion thật) | Test hiện tại chỉ dùng box tổng hợp 2-3 frame, chưa test với detection noise thực tế từ model thật | Trung bình |
-| Backend pipeline store khi restart server | Thiết kế in-memory, **biết trước sẽ mất dữ liệu khi restart** — không phải bug, là giới hạn thiết kế chưa nâng cấp lên SQLAlchemy/SQLite | Cao nếu dùng production |
-| Elastic auto-scale thật (RoundRobinBus + MergeBus + N node YOLO chạy song song thật) | `Executor`'s `scale_up()`/`scale_down()` mới test bằng mock (T-EXEC-09/10), chưa có integration test thật spawn nhiều process worker | Cao — đây là tính năng lõi "elastic" nhưng chưa verify end-to-end với multiprocessing thật |
+| `ObjectTracker` qua video dài thật với occlusion thật | Đã verify qua smoke test thật (100 frame, model thật) nhưng chưa test với video dài/occlusion phức tạp | Thấp-Trung bình |
+| Elastic auto-scale thật (RoundRobinBus + MergeBus + N node YOLO chạy song song thật) | `Executor`'s `scale_up()`/`scale_down()` mới test bằng mock (T-EXEC-09/10), chưa có integration test thật spawn nhiều process worker — kế hoạch Phase 2/v0.4.0 | Cao — đây là tính năng lõi "elastic" nhưng chưa verify end-to-end với multiprocessing thật |
 | Visual editor frontend (kéo-thả) | Không nằm trong scope đã build — chỉ có backend API | N/A — chưa làm |
 | C++ CPU/GPU runtime (LibTorch/CUDA) | Không nằm trong scope đã build — chỉ có Python runtime | N/A — chưa làm |
 

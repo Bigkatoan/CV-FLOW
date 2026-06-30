@@ -3,9 +3,13 @@ cv_flow.nodes.postprocess — NMS: Non-Maximum Suppression for YOLO output.
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from cv_flow.node import Node
+
+logger = logging.getLogger("cv_flow.nodes.postprocess")
 
 
 def _xywh_to_xyxy(boxes: np.ndarray) -> np.ndarray:
@@ -64,6 +68,7 @@ def run_nms(
     iou_threshold: float = 0.45,
     max_detections: int = 512,
     format: str = "yolov8",
+    output_layout: str | None = "features_first",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Run NMS over raw YOLO model output.
@@ -72,6 +77,15 @@ def run_nms(
     ----------
     raw : np.ndarray, shape (1, 84, N) for yolov8 (4 box coords + 80 classes)
           or (1, N, 85) for yolov5 (4 box coords + 1 obj conf + 80 classes).
+    output_layout : only used when format="yolov8". One of:
+          - "features_first" (default): raw (after stripping the batch dim)
+            is (84, N) — features before boxes, the standard YOLOv8 ONNX
+            export layout. Always transposed to (N, 84).
+          - "boxes_first": raw is already (N, 84) — no transpose.
+          - "auto" / None: fall back to the old shape-comparison heuristic
+            (transpose only if dim0 < dim1). Fragile for N < 84 (e.g. a
+            sparse/pruned model); logs a WARNING when used. Prefer setting
+            output_layout explicitly instead.
 
     Returns
     -------
@@ -82,10 +96,20 @@ def run_nms(
         arr = arr[0]
 
     if format == "yolov8":
-        # arr shape: (84, N) -> transpose to (N, 84). Assumes N (box count) >
-        # feature count (4+num_classes), true for any real YOLOv8 output.
-        if arr.shape[0] < arr.shape[1]:
+        if output_layout == "features_first":
             arr = arr.T
+        elif output_layout == "boxes_first":
+            pass
+        else:
+            logger.warning(
+                "run_nms: output_layout=%r — falling back to shape-comparison "
+                "heuristic, which is wrong when box count < feature count "
+                "(84). Pass output_layout='features_first' or 'boxes_first' "
+                "explicitly instead.",
+                output_layout,
+            )
+            if arr.shape[0] < arr.shape[1]:
+                arr = arr.T
         boxes_xywh = arr[:, :4]
         class_scores = arr[:, 4:]
         scores = class_scores.max(axis=1)
@@ -134,6 +158,7 @@ class NMS(Node):
         iou_threshold: float = 0.45,
         max_detections: int = 512,
         format: str = "yolov8",
+        output_layout: str | None = "features_first",
         name: str | None = None,
     ) -> None:
         super().__init__(name=name)
@@ -143,6 +168,7 @@ class NMS(Node):
         self.iou_threshold        = iou_threshold
         self.max_detections       = max_detections
         self.format               = format
+        self.output_layout        = output_layout
 
     def initialize(self) -> None:
         self._sub = self.subscribe(self._input_topic)
@@ -158,6 +184,7 @@ class NMS(Node):
             iou_threshold=self.iou_threshold,
             max_detections=self.max_detections,
             format=self.format,
+            output_layout=self.output_layout,
         )
         self._pub.write({
             "boxes": boxes, "scores": scores, "class_ids": class_ids,

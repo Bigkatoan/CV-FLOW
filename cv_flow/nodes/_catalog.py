@@ -14,8 +14,9 @@ NODE_CATALOG: dict[str, dict] = {
     "CameraSource": {
         "category":    "input",
         "description": (
-            "Reads frames from a USB/V4L2 camera. Publishes BGR frame + "
-            "timestamp + monotonic seq number on the output topic."
+            "Reads frames from a USB/V4L2 camera (device_index) or a Jetson CSI "
+            "camera (gstreamer_pipeline, e.g. via build_nvargus_pipeline()). "
+            "Publishes BGR frame + timestamp + monotonic seq number."
         ),
         "runtime":      "python",
         "elastic_capable": False,
@@ -30,17 +31,29 @@ NODE_CATALOG: dict[str, dict] = {
         ],
         "parameters": [
             {"name": "device_index", "type": "int",   "default": 0,
-             "description": "Camera index (0 = first camera)"},
+             "description": "USB/V4L2 camera index (0 = first camera). Ignored if "
+                            "gstreamer_pipeline is set."},
             {"name": "width",        "type": "int",   "default": 1280},
             {"name": "height",       "type": "int",   "default": 720},
             {"name": "fps",          "type": "int",   "default": 30},
+            {"name": "gstreamer_pipeline", "type": "str", "default": "",
+             "description": (
+                 "GStreamer pipeline string for CSI cameras (Jetson nvarguscamerasrc). "
+                 "When set, takes priority over device_index/width/height/fps. "
+                 "Requires an OpenCV build with GStreamer support — the JetPack "
+                 "apt-installed OpenCV has it, the generic PyPI opencv-python wheel "
+                 "does not. See build_nvargus_pipeline() helper."
+             )},
         ],
         "example": "CameraSource(device_index=0, width=1280, height=720, fps=30)",
     },
 
     "RtspSource": {
         "category":    "input",
-        "description": "Reads an RTSP video stream with automatic reconnect on failure.",
+        "description": (
+            "Reads an RTSP video stream with automatic reconnect on failure "
+            "(exponential backoff, capped at max_reconnect_delay_s, resets on success)."
+        ),
         "runtime":      "python",
         "elastic_capable": False,
         "inputs":  [],
@@ -52,7 +65,9 @@ NODE_CATALOG: dict[str, dict] = {
             {"name": "url",              "type": "str",   "required": True,
              "description": "RTSP URL, e.g. rtsp://192.168.1.1:554/stream"},
             {"name": "reconnect_delay_s", "type": "float", "default": 2.0,
-             "description": "Seconds to wait before reconnecting after failure"},
+             "description": "Initial seconds to wait before reconnecting after failure"},
+            {"name": "max_reconnect_delay_s", "type": "float", "default": 30.0,
+             "description": "Cap for the doubling backoff delay between reconnect attempts"},
         ],
         "example": 'RtspSource(url="rtsp://192.168.1.1:554/stream")',
     },
@@ -101,6 +116,29 @@ NODE_CATALOG: dict[str, dict] = {
         ],
     },
 
+    "Tee": {
+        "category":    "processing",
+        "description": (
+            "Fans a single topic out to N independent output topics, republishing "
+            "every frame unchanged. Required whenever more than one downstream node "
+            "needs the SAME upstream data — e.g. a detect-and-draw pipeline where "
+            "both Preprocess (for inference) and DrawBbox (for the final overlay) "
+            "need the original camera frame: every topic/bus in this DAM model is a "
+            "single-reader FIFO, so two nodes subscribing to the same topic directly "
+            "would compete for the same queue instead of each seeing every frame."
+        ),
+        "runtime":      "python",
+        "elastic_capable": False,
+        "inputs":  [{"slot": "in", "dtype": "any", "description": "Any single-field topic"}],
+        "outputs": [{"slot": "out", "dtype": "any",
+                     "description": "Same data republished to each output topic"}],
+        "parameters": [
+            {"name": "output_topics", "type": "list", "required": True,
+             "description": "List of topic names to republish the input onto"},
+        ],
+        "example": 'Tee("camera_frame", ["camera_frame_infer", "camera_frame_draw"])',
+    },
+
     "GrayscaleConvert": {
         "category":    "processing",
         "description": "Converts a BGR frame to grayscale (mono8).",
@@ -130,11 +168,20 @@ NODE_CATALOG: dict[str, dict] = {
              "description": "Path to the ONNX model file"},
             {"name": "device",     "type": "str", "default": "cpu",
              "choices": ["cpu", "cuda:0"],
-             "description": "Inference device"},
-            {"name": "providers",  "type": "list", "default": ["CPUExecutionProvider"],
-             "description": "ONNX Runtime execution providers (ordered by priority)"},
+             "description": (
+                 "Inference device. device=\"cuda:0\" tries ONNX Runtime providers in order "
+                 "TensorrtExecutionProvider -> CUDAExecutionProvider -> CPUExecutionProvider "
+                 "(first one available on the host is used); device=\"cpu\" forces "
+                 "CPUExecutionProvider only."
+             )},
+            {"name": "trt_cache_dir", "type": "str", "default": "",
+             "description": (
+                 "If set, enables TensorRT engine disk caching at this path so the (slow, "
+                 "~1-2 min) engine build only happens once instead of on every process start."
+             )},
         ],
-        "example": 'YoloInference(model_path="models/yolov8n.onnx", device="cpu")',
+        "example": 'YoloInference(model_path="models/yolov8n.onnx", device="cuda:0", '
+                   'trt_cache_dir=".trt_cache")',
     },
 
     "OnnxInference": {
@@ -152,7 +199,13 @@ NODE_CATALOG: dict[str, dict] = {
              "description": "ONNX input node name"},
             {"name": "output_name",   "type": "str", "default": "output0"},
             {"name": "device",        "type": "str", "default": "cpu",
-             "choices": ["cpu", "cuda:0"]},
+             "choices": ["cpu", "cuda:0"],
+             "description": (
+                 "device=\"cuda:0\" tries TensorrtExecutionProvider -> CUDAExecutionProvider -> "
+                 "CPUExecutionProvider in order; device=\"cpu\" forces CPU only."
+             )},
+            {"name": "trt_cache_dir", "type": "str", "default": "",
+             "description": "If set, enables TensorRT engine disk caching at this path."},
         ],
     },
 
@@ -182,6 +235,14 @@ NODE_CATALOG: dict[str, dict] = {
             {"name": "max_detections",       "type": "int",   "default": 512},
             {"name": "format",               "type": "str",   "default": "yolov8",
              "choices": ["yolov8", "yolov5"]},
+            {"name": "output_layout",        "type": "str",   "default": "features_first",
+             "choices": ["features_first", "boxes_first", "auto"],
+             "description": (
+                 "Only used when format=\"yolov8\". \"features_first\" (default) matches "
+                 "the standard YOLOv8 ONNX export shape (1, 84, N). \"auto\" falls back to "
+                 "a shape-comparison heuristic that breaks when box count < 84 — avoid it "
+                 "unless you know your model's raw output layout varies."
+             )},
         ],
     },
 

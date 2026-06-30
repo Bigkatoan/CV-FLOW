@@ -67,6 +67,48 @@ def test_run_nms_yolov8_format():
     assert not np.any((scores > 0) & (class_ids == 3))
 
 
+def test_run_nms_small_n_features_first_explicit():
+    """output_layout='features_first' (default) is correct even when N < 84,
+    where the old shape-comparison heuristic silently picked the wrong axis."""
+    n_classes = 80
+    n_boxes = 5  # N < 84 — the case the old heuristic got wrong
+    raw = np.zeros((1, 4 + n_classes, n_boxes), dtype=np.float32)
+    for i in range(n_boxes):
+        raw[0, 0:4, i] = [10 * i, 10 * i, 4, 4]   # well-separated, non-overlapping boxes
+        raw[0, 4, i] = 0.9                         # class 0, high confidence
+
+    boxes, scores, class_ids = run_nms(
+        raw, confidence_threshold=0.3, max_detections=10, output_layout="features_first",
+    )
+    n_detected = int(np.sum(class_ids != -1))
+    assert n_detected == n_boxes, f"expected {n_boxes} real detections, got {n_detected}"
+    assert np.all(scores[:n_boxes] > 0.3)
+    assert np.all(class_ids[:n_boxes] == 0)
+    # Box 2's center should be (20, 20) -> xyxy (18,18,22,22)
+    assert np.allclose(boxes[2], [18, 18, 22, 22])
+
+
+def test_run_nms_small_n_auto_heuristic_is_wrong_and_warns(caplog):
+    """output_layout='auto' reproduces the old fragile heuristic (and warns) —
+    documents that it picks the wrong axis for N < 84, unlike the default."""
+    n_classes = 80
+    n_boxes = 5
+    raw = np.zeros((1, 4 + n_classes, n_boxes), dtype=np.float32)
+    for i in range(n_boxes):
+        raw[0, 0:4, i] = [10 * i, 10 * i, 4, 4]
+        raw[0, 4, i] = 0.9
+
+    with caplog.at_level("WARNING"):
+        boxes, scores, class_ids = run_nms(
+            raw, confidence_threshold=0.3, max_detections=10, output_layout="auto",
+        )
+    assert "heuristic" in caplog.text.lower()
+    n_detected = int(np.sum(class_ids != -1))
+    # The heuristic does NOT transpose here (84 < 5 is False), so it does not
+    # recover all 5 real boxes the way features_first does.
+    assert n_detected != n_boxes
+
+
 def test_run_nms_respects_max_detections():
     """Output arrays are always padded/truncated to max_detections length."""
     n_classes = 80

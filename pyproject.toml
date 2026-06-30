@@ -4,17 +4,40 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cv-flow"
-version = "0.2.0"
+version = "0.3.0"
 description = "DAM-backed Computer Vision pipeline (ROS2-inspired, topic-based)"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [
+    { name = "Bigkatoan" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
 dependencies = [
     "numpy>=1.26.0",
     "opencv-python>=4.10.0",
-    "onnxruntime>=1.18.0",
 ]
 
+[project.urls]
+Homepage   = "https://github.com/Bigkatoan/CV-FLOW"
+Repository = "https://github.com/Bigkatoan/CV-FLOW"
+
 [project.optional-dependencies]
-gpu    = ["torch>=2.0.0"]
+# ONNX Runtime is split cpu/gpu because the package names differ
+# (onnxruntime vs onnxruntime-gpu) — installing both is wrong on any one
+# machine. On Jetson, neither is normally needed: NVIDIA ships a
+# Jetson-specific onnxruntime-gpu build outside of PyPI (see README) and it
+# must not be reinstalled by these extras.
+cpu    = ["onnxruntime>=1.18.0"]
+gpu    = ["torch>=2.0.0", "onnxruntime-gpu>=1.18.0"]
 mqtt   = ["paho-mqtt>=2.0.0"]
 stream = ["websockets>=12.0"]
 backend = ["fastapi>=0.111.0", "uvicorn>=0.30.0", "sqlalchemy>=2.0.0", "aiosqlite>=0.20.0"]
@@ -28,10 +51,15 @@ where   = ["."]
 include = ["cv_flow*"]
 
 [tool.setuptools.package-data]
-"cv_flow" = ["lib/*.so", "topic_templates/*.topic"]
+"cv_flow" = ["topic_templates/*.topic"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros -p no:ament_pep257 -p no:ament_copyright -p no:ament_flake8 -p no:ament_lint -p no:ament_xmllint"
+markers = [
+    "gpu: requires a real CUDA-capable GPU (slow — TensorRT engine build can take 1-2 min)",
+    "multiprocess: spawns real multiprocessing.Process workers (slower than in-process tests)",
+    "hardware: requires physically attached hardware (camera, etc.) — not runnable in CI",
+]
