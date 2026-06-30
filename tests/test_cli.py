@@ -28,10 +28,11 @@ def test_package_exports():
     import cv_flow
     assert hasattr(cv_flow, "Node")
     assert hasattr(cv_flow, "Executor")
+    assert hasattr(cv_flow, "ElasticStage")
     assert hasattr(cv_flow, "Topic")
     assert hasattr(cv_flow, "load_topics")
     assert hasattr(cv_flow, "get_topic")
-    assert cv_flow.__version__ == "0.3.0"
+    assert cv_flow.__version__ == "0.4.0"
 
 
 # ── cv-flow validate ──────────────────────────────────────────────────────────

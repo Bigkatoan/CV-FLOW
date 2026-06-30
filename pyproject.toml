@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cv-flow"
-version = "0.3.0"
+version = "0.4.0"
 description = "DAM-backed Computer Vision pipeline (ROS2-inspired, topic-based)"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -7,7 +7,7 @@ from fastapi import FastAPI
 
 from backend.app.api import guide, nodes, pipeline, topics
 
-app = FastAPI(title="CV-FLOW Visual Editor API", version="0.3.0")
+app = FastAPI(title="CV-FLOW Visual Editor API", version="0.4.0")
 
 app.include_router(nodes.router)
 app.include_router(topics.router)

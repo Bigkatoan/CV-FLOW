@@ -25,6 +25,23 @@ Ordering semantics (DEFAULT — ordered queue):
 
 Drop mode (fastest, no ordering):
   Same as above but no logging; newest-wins semantics.
+
+Concurrency note: write()/read() are safe for the common case of ONE
+process advertising and ONE process subscribing where each side only ever
+runs sequentially relative to itself (true for every plain single-process
+or single-writer/single-reader pipeline in this codebase). They are NOT
+safe for a genuine concurrent writer process and reader process touching
+the SAME bus at the same time: `_write_header()` writes write_count,
+read_count, and drop_count together in one call based on whatever the
+caller last read, so a writer's drop-oldest path (which also advances
+read_count) can race a concurrent read() and clobber its progress, or vice
+versa — no cross-process lock protects this. This was discovered building
+`cv_flow.elastic.ElasticStage`, which spawns real multiprocessing workers
+that genuinely read/write concurrently with the main process; the fix
+there is a `multiprocessing.Lock` held by both sides around each bus
+operation (see `cv_flow/elastic.py` module docstring) rather than changing
+PortBus itself. If you add new code with a real concurrent writer+reader
+on one PortBus, you need the same kind of external locking.
 """
 from __future__ import annotations
 

@@ -74,6 +74,30 @@ def test_rr_02_add_bus():
         rrb.close()
 
 
+def test_rr_02b_add_bus_with_explicit_name():
+    """add_bus(name=...) creates the bus under that exact deterministic name
+    (needed so a separately-spawned worker process can derive and attach to
+    the same shared-memory segment by name)."""
+    name = _unique()
+    rrb  = RoundRobinBus(name, n=1, slot_bytes=8, queue_depth=8)
+    try:
+        explicit_name = f"{name}__explicit"
+        new_bus = rrb.add_bus(name=explicit_name)
+        assert new_bus.name == explicit_name
+
+        # A second PortBus opened by the same name (create=False) attaches
+        # to the SAME shared memory segment.
+        attached = PortBus(explicit_name, 8, create=False)
+        try:
+            new_bus.write(b"\xEE" * 8, seq=1)
+            result = attached.read(timeout_ms=100)
+            assert result is not None
+        finally:
+            attached.close(unlink=False)
+    finally:
+        rrb.close()
+
+
 # ── T-RR-03 ───────────────────────────────────────────────────────────────────
 
 def test_rr_03_remove_bus():

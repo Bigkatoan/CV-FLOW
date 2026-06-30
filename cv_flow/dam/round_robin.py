@@ -3,6 +3,16 @@ cv_flow.dam.round_robin — RoundRobinBus: Elastic fan-out (1 writer → N reade
 
 Each write distributes to one worker bus in a round-robin fashion.
 Workers can be added/removed at runtime for elastic scaling.
+
+Concurrency note: this class is thread-safe for its OWN bookkeeping
+(write()'s counter, add_bus()/remove_bus()), but the underlying per-worker
+PortBus instances it creates inherit PortBus's lack of cross-process
+read/write locking — see cv_flow/dam/bus.py's concurrency note. If the
+buses this creates have a real reader process running concurrently with
+this class's write() calls (the actual elastic worker scenario), you need
+external locking per bus; `cv_flow.elastic.ElasticStage` does its own
+manual round-robin + per-worker `multiprocessing.Lock` instead of using
+this class directly, for exactly that reason.
 """
 from __future__ import annotations
 
@@ -57,12 +67,18 @@ class RoundRobinBus:
 
     # ── scale ─────────────────────────────────────────────────────────────────
 
-    def add_bus(self) -> PortBus:
-        """Add a new worker bus and return it. Caller attaches as reader."""
+    def add_bus(self, name: str | None = None) -> PortBus:
+        """
+        Add a new worker bus and return it. Caller attaches as reader.
+
+        Pass `name` to control the shared-memory segment name deterministically
+        (e.g. so a separately-spawned worker process can derive the exact same
+        name and attach with create=False) — default auto-generates one.
+        """
         with self._lock:
-            idx  = len(self._buses)
-            name = f"{self.base_name}_{idx}_{uuid.uuid4().hex[:4]}"
-            bus  = PortBus(name, self.slot_bytes, create=True, **self._bus_kwargs)
+            idx = len(self._buses)
+            bus_name = name if name is not None else f"{self.base_name}_{idx}_{uuid.uuid4().hex[:4]}"
+            bus = PortBus(bus_name, self.slot_bytes, create=True, **self._bus_kwargs)
             self._buses.append(bus)
         return bus
 

@@ -66,7 +66,12 @@ cv_flow/
 │   ├── subscriber.py         Subscriber (bytes → ndarray/dict/Tensor)
 │   └── topic.py              Topic class + registry (get_topic/list_topics/load_topics)
 ├── node.py                 Node base class (advertise()/subscribe()/initialize()/spin_once()/shutdown())
-├── executor.py              Executor (spin loop, hz limiter, SIGINT, elastic monitor)
+├── executor.py              Executor (spin loop, hz limiter, SIGINT, elastic monitor; scale_up()/
+│                            scale_down() mặc định gọi add_worker()/remove_worker() nếu node có)
+├── elastic.py               ElasticStage — elastic auto-scale THẬT (multiprocessing.Process worker
+│                            thật, kể từ v0.4.0). Tự quản lý round-robin fan-out + reorder buffer
+│                            fan-in qua PortBus + multiprocessing.Lock per-worker (không dùng
+│                            RoundRobinBus/MergeBus trực tiếp — xem ghi chú concurrency bên dưới).
 ├── nodes/                  # node có sẵn
 │   ├── _catalog.py          NODE_CATALOG — metadata cho visual editor & deployment guide
 │   ├── camera.py             CameraSource, RtspSource, VideoFileSource
@@ -111,7 +116,11 @@ tests/                       # mirror cấu trúc cv_flow/ — xem CHANGELOG.md 
 **Chưa có / nằm ngoài phạm vi đã build:**
 - Không có frontend UI kéo-thả thực sự (chỉ có backend API phục vụ cho UI đó).
 - Không có runtime C++ (CPU/GPU) — yêu cầu gốc có nhắc tới multi-runtime (numpy / torch+pycuda / C++ CPU / C++ GPU) nhưng hiện tại **chỉ có runtime Python (numpy / torch)**.
-- CUDA IPC zero-copy thật (`CudaPortBus`) và elastic multiprocessing thật (`Executor.scale_up/scale_down`) — kế hoạch ở Phase 2 (xem CHANGELOG.md, sẽ lên v0.4.0).
+- CUDA IPC zero-copy thật cho `CudaPortBus` — **đã thử thật (Phase 2), xác nhận không khả thi trên
+  GPU tích hợp của Jetson** (xem CHANGELOG.md `[0.4.0]`). Đây là kết luận cuối, không phải gap còn
+  treo — `CudaPortBus` giữ nguyên CPU-roundtrip, docstring đã sửa cho trung thực.
+- Elastic multiprocessing thật: **đã hoàn thành ở Phase 2 (v0.4.0)** qua `cv_flow.elastic.ElasticStage`
+  — xem mục 2 (kiến trúc) và CHANGELOG.md.
 
 ---
 
@@ -211,26 +220,31 @@ cv-flow run launch.py           # chạy script launch (gọi Executor.spin())
 8. **FastAPI**: mọi endpoint `DELETE` với `status_code=204` phải có `response_model=None` (bug riêng của FastAPI 0.111.0 đang dùng trong venv này).
 9. **Không sửa lại `pyproject.toml`'s `addopts` (ROS2 plugin disable list)** trừ khi thật sự cần thêm plugin mới — đây là fix cho môi trường máy chủ, không phải config tuỳ chọn.
 10. **Mỗi topic/bus chỉ có 1 reader thật sự** (FIFO, read cursor nằm trong shared-memory header, dùng chung cho mọi `Subscriber` cùng tên bus): nếu 2 node khác nhau cần cùng 1 dữ liệu nguồn (vd cả `Preprocess` lẫn `DrawBbox` đều cần frame gốc), **không** cho cả 2 cùng `subscribe()` 1 topic — chúng sẽ tranh nhau đọc và rớt dữ liệu. Dùng `Tee` (`cv_flow/nodes/tee.py`) để fan-out ra N topic riêng trước. Bug này chỉ lộ ra khi chạy thật nhiều frame liên tục (test với 1 frame đơn lẻ không phát hiện được) — phát hiện qua `scripts/smoke_pipeline.py` trên hardware thật.
+11. **`PortBus` không an toàn khi có writer process và reader process THẬT chạy đồng thời** trên cùng 1 bus — header (`write_count`/`read_count`/`drop_count`) được ghi đè nguyên cụm trong 1 lần gọi `_write_header()`, không có lock cross-process, nên 2 process thao tác song song có thể ghi đè tiến trình đọc/ghi của nhau (gây duplicate hoặc mất frame). Đây là lỗi tồn tại từ bản gốc, chỉ lộ ra khi xây `ElasticStage` (worker process thật đầu tiên đọc/ghi đồng thời với process chính). Mọi pipeline 1-process tuần tự (toàn bộ phần còn lại của codebase) KHÔNG bị ảnh hưởng. Nếu viết code mới có writer/reader THẬT khác process trên cùng 1 `PortBus` (ngoài `ElasticStage`, vốn đã tự xử lý bằng `multiprocessing.Lock` per-worker), phải tự thêm lock tương tự — không sửa `PortBus` dùng chung cho việc này.
 
 ---
 
 ## 5. Những gì CHƯA được test (gaps)
 
-Cập nhật sau Phase 1 (v0.3.0) — đã verify thật trên Jetson Orin Nano: GPU
+Cập nhật sau Phase 2 (v0.4.0) — đã verify thật trên Jetson Orin Nano: GPU
 (`torch`/`onnxruntime-gpu` thật), `YoloInference`/`OnnxInference` với model
 ONNX thật (CPU/CUDA/TensorRT), `CameraSource` với USB camera thật,
-`PipelineStore` SQLite sống sót qua restart (giả lập). Chi tiết xem
-`CHANGELOG.md` mục `[0.3.0]`. Các mục còn lại dưới đây là gap thật sự còn tồn tại:
+`PipelineStore` SQLite sống sót qua restart (giả lập), và **elastic
+multiprocessing thật** qua `ElasticStage` (spawn/scale up/scale down/shutdown
++ zero lost/duplicate/misorder frame qua nhiều lần stress test lặp lại —
+xem `tests/test_elastic.py`). CUDA IPC zero-copy đã thử thật và xác nhận
+không khả thi trên phần cứng này (không phải gap, là kết luận cuối). Chi
+tiết xem `CHANGELOG.md` mục `[0.3.0]` và `[0.4.0]`. Các mục còn lại dưới
+đây là gap thật sự còn tồn tại:
 
 | Thành phần | Vì sao chưa test | Mức độ rủi ro |
 |---|---|---|
-| `CudaPortBus` zero-copy CUDA IPC thật | Hiện tại vẫn round-trip qua CPU RAM dù máy đã có GPU — chưa implement IPC thật (kế hoạch Phase 2/v0.4.0) | Trung bình — fallback CPU hoạt động đúng, nhưng không đạt zero-copy như tên class ngụ ý |
+| `ElasticStage` với `node_factory` là node GPU thật (vd `YoloInference`) | Test thật mới dùng worker CPU đơn giản (nhân đôi giá trị) để cô lập đúng vấn đề concurrency; chưa test tổ hợp N worker GPU thật chạy song song (CUDA context riêng mỗi worker, có thể tốn VRAM/tranh GPU) | Trung bình — cơ chế lõi (spawn/scale/lock/reorder) đã verify đúng, nhưng chưa đo hiệu năng/ổn định khi worker thật sự nặng |
 | `CameraSource(gstreamer_pipeline=...)` với camera CSI vật lý | Board chưa gắn module cảm biến CSI lúc build — chỉ test được chuỗi pipeline sinh ra đúng cú pháp (`build_nvargus_pipeline`), chưa mở camera CSI thật | Trung bình — code đã review kỹ theo cú pháp nvarguscamerasrc chuẩn, nhưng chưa chạy thật |
 | `RtspSource` reconnect với stream thật | Backoff logic đã test kỹ bằng mock (doubles/caps/resets đúng), nhưng chưa nối với 1 RTSP server thật để xác nhận hành vi qua mất kết nối mạng thật | Trung bình |
 | `StreamViewer` (WebSocket JPEG broadcast) | Chưa viết test có client WebSocket thật kết nối vào, chỉ review logic | Trung bình |
 | `MqttPublisher` | Không có MQTT broker trong môi trường test | Trung bình — code path connect/publish chưa từng chạy thật |
 | `ObjectTracker` qua video dài thật với occlusion thật | Đã verify qua smoke test thật (100 frame, model thật) nhưng chưa test với video dài/occlusion phức tạp | Thấp-Trung bình |
-| Elastic auto-scale thật (RoundRobinBus + MergeBus + N node YOLO chạy song song thật) | `Executor`'s `scale_up()`/`scale_down()` mới test bằng mock (T-EXEC-09/10), chưa có integration test thật spawn nhiều process worker — kế hoạch Phase 2/v0.4.0 | Cao — đây là tính năng lõi "elastic" nhưng chưa verify end-to-end với multiprocessing thật |
 | Visual editor frontend (kéo-thả) | Không nằm trong scope đã build — chỉ có backend API | N/A — chưa làm |
 | C++ CPU/GPU runtime (LibTorch/CUDA) | Không nằm trong scope đã build — chỉ có Python runtime | N/A — chưa làm |
 

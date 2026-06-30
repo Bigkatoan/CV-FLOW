@@ -158,9 +158,26 @@ class Executor:
                     idle_counts[name] = 0
 
     def scale_up(self, node) -> None:
-        """Hook called when a node's buffer is too deep. Override for real impl."""
-        logger.debug("scale_up(%s)", node.name)
+        """
+        Hook called when a node's buffer is too deep.
+
+        Default: if `node` exposes `add_worker()` (e.g. cv_flow.elastic.ElasticStage,
+        which spawns a real multiprocessing.Process worker), call it. Override
+        for custom behavior.
+        """
+        if hasattr(node, "add_worker"):
+            node.add_worker()
+        else:
+            logger.debug("scale_up(%s)", node.name)
 
     def scale_down(self, node) -> None:
-        """Hook called when a node's buffer is consistently empty. Override."""
-        logger.debug("scale_down(%s)", node.name)
+        """
+        Hook called when a node's buffer is consistently empty.
+
+        Default: if `node` exposes `remove_worker()`, call it. Override for
+        custom behavior.
+        """
+        if hasattr(node, "remove_worker"):
+            node.remove_worker()
+        else:
+            logger.debug("scale_down(%s)", node.name)

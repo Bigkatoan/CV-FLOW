@@ -94,6 +94,30 @@ infer  = YoloInference("yolo_input", "yolo_raw",
 cv_flow.Executor([source, ..., writer]).spin()
 ```
 
+### Elastic auto-scaling (real multiprocessing)
+
+`ElasticStage` runs N real worker processes for one transform stage
+(e.g. inference) and merges results back in order — drop it in wherever
+the wrapped node would otherwise go:
+
+```python
+import functools
+from cv_flow.elastic import ElasticStage
+from cv_flow.nodes import YoloInference
+
+stage = ElasticStage(
+    "yolo_input", "yolo_raw",
+    node_factory=functools.partial(YoloInference, model_path="yolov8n.onnx",
+                                    device="cuda:0", trt_cache_dir=".trt_cache"),
+    initial_replicas=1, max_replicas=2,
+)
+cv_flow.Executor([..., stage, ...], elastic=True).spin()
+```
+
+On an 8GB Jetson Orin Nano, keep `max_replicas` small — each replica loads
+its own full model and CUDA context, so VRAM/RAM cost scales linearly with
+replica count.
+
 List everything available:
 
 ```bash

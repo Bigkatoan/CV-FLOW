@@ -18,10 +18,11 @@ Quick start
 """
 from __future__ import annotations
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from cv_flow.node import Node
 from cv_flow.executor import Executor
+from cv_flow.elastic import ElasticStage
 from cv_flow.topic.topic import (
     Topic, get_topic, list_topics, clear_topics, load_topics,
 )
@@ -30,7 +31,7 @@ from cv_flow.topic.parser import parse_topic_file, load_topics_dir, ParseError
 
 __all__ = [
     "__version__",
-    "Node", "Executor",
+    "Node", "Executor", "ElasticStage",
     "Topic", "get_topic", "list_topics", "clear_topics", "load_topics",
     "TopicDef", "PortDef", "FieldDef", "DTYPE_MAP",
     "parse_topic_file", "load_topics_dir", "ParseError",

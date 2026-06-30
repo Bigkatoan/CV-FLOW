@@ -3,6 +3,83 @@
 All notable changes to this project are documented here, following
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) conventions.
 
+## [0.4.0] — 2026-06-30 — Real elastic multiprocessing; honest CUDA IPC status
+
+Phase 2 of the Jetson hardening plan: complete the originally-designed
+architecture for real — real multiprocessing-backed elastic auto-scaling,
+and a real (not just attempted) verdict on CUDA IPC zero-copy.
+
+### Added
+- `cv_flow.elastic.ElasticStage` — a drop-in replacement for a single
+  transform Node (e.g. `YoloInference`) that internally fans work out to N
+  real `multiprocessing.Process` workers (each running its own instance of
+  a `node_factory`, in total isolation — own CUDA context, own model load)
+  and merges results back in original order. `Executor.scale_up()`/
+  `scale_down()` now have a REAL default implementation: they call
+  `add_worker()`/`remove_worker()` on any node that exposes them (previously
+  empty `logger.debug(...)` hooks).
+- `RoundRobinBus.add_bus(name=...)` — optional explicit shared-memory
+  segment name (previously always auto-generated with a random suffix),
+  needed so a separately-spawned worker process can derive and attach to
+  the exact same segment.
+
+### Fixed — real bugs found building and stress-testing ElasticStage
+- **`PortBus` cross-process concurrency**: `_write_header()` writes
+  write_count/read_count/drop_count together based on whatever the caller
+  last read, with no cross-process lock. A genuine concurrent writer
+  process and reader process on the same bus (exactly what elastic workers
+  are) can race and silently duplicate or drop a frame. This had never
+  manifested before because every existing pipeline in this codebase is
+  single-process/sequential. Documented prominently in `PortBus`'s,
+  `RoundRobinBus`'s, and `MergeBus`'s docstrings. Fix is scoped to
+  `ElasticStage`, not PortBus itself: every worker gets its own
+  `multiprocessing.Lock`, held by both the main process and that worker
+  around every operation on that worker's bus pair.
+- **`MergeBus` ordering is best-effort, not strict**: `read()` only
+  compares buses that already have data *right now* — it doesn't wait for
+  a momentarily-empty bus that might still produce an earlier seq a few ms
+  later, so a faster worker's later-seq result can be returned before a
+  slower worker's earlier-seq one. `MergeBus`'s own docstring previously
+  overstated this as a strict guarantee — corrected. `ElasticStage` adds
+  its own reorder buffer on top to get real strict ordering, with a
+  configurable stall-timeout skip-ahead so one genuinely lost upstream
+  frame can't stall the pipeline's output forever.
+- **Worker output seq numbering**: a worker's `Publisher.write()` defaults
+  to an independent per-publisher auto-incrementing counter — fine for a
+  single node, but means two different ElasticStage workers' "seq=1" are
+  unrelated frames once there's more than one worker, silently breaking
+  downstream ordering. Fixed by transparently wrapping each worker's
+  publish call to carry the same seq_no as its most recent read.
+
+### Investigated — CUDA IPC real zero-copy: not viable on this hardware
+- Attempted real CUDA IPC for `CudaPortBus` using
+  `torch.multiprocessing.reductions.reduce_tensor()` (the same mechanism
+  torch itself uses for cross-process GPU tensor sharing). Confirmed NOT
+  viable on this Jetson Orin Nano (JetPack 6): the receiving process's
+  rebuild call fails with `torch.AcceleratorError: CUDA error: invalid
+  argument` from `torch.UntypedStorage._new_shared_cuda`, consistently,
+  regardless of explicit `torch.cuda.set_device()`/`init()` in the child.
+  Consistent with Jetson's integrated-GPU (unified host/device memory)
+  architecture not supporting the `cudaIpcGetMemHandle`/
+  `cudaIpcOpenMemHandle` mechanism, which targets discrete GPUs with
+  separate VRAM addressable over PCIe from multiple processes.
+  `CudaPortBus` keeps its existing CPU-roundtrip behavior; its docstring
+  now explains this honestly instead of implying real IPC. While
+  investigating, also found and fixed a real, separate, more serious bug:
+  whenever `using_cuda=True`, the bus slot was hardcoded to 64 bytes
+  (sized for a CUDA IPC handle that was never actually used), silently
+  truncating any tensor larger than that on write and always returning a
+  shapeless/dtypeless flat uint8 buffer on read — i.e. `CudaPortBus` never
+  correctly round-tripped any realistic-sized tensor before this fix. Now
+  uses the full declared `slot_bytes` and carries dtype/shape through the
+  bus's existing per-slot metadata channel.
+
+### Added — tooling
+- `scripts/build_wheel.sh` — builds a `cv-flow` wheel into `~/wheels` (or a
+  given directory) for fully offline reuse: `pip install --no-index
+  --find-links ~/wheels "cv-flow[gpu]"` from another project. Verified
+  end-to-end: built, installed into an isolated location, imported successfully.
+
 ## [0.3.0] — 2026-06-30 — Real hardware validation on Jetson Orin Nano
 
 Phase 1 of hardening CV-FLOW for production deployment on an NVIDIA Jetson

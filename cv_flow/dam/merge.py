@@ -1,10 +1,24 @@
 """
 cv_flow.dam.merge — MergeBus: Elastic fan-in (N writers → 1 reader).
 
-Reads from all buses and delivers frames in seq_no order.
-Solves the concurrent-worker ordering problem: even if N elastic workers
-return at the same time, MergeBus sorts by seq_no so the downstream
-node always sees a monotonically increasing sequence.
+Reads from all buses and delivers the lowest seq_no among whatever buses
+currently have data ready.
+
+Important limitation (found building cv_flow.elastic.ElasticStage): this is
+BEST-EFFORT ordering, not a strict guarantee. read() only compares buses
+that already have a frame available *at the moment it is called* — it does
+not wait for a momentarily-empty bus that might still produce an earlier
+seq_no a few milliseconds later. If one worker is briefly slower than
+another, a later-seq result from the faster worker can be returned before
+an earlier-seq result from the slower one. Strict ordering needs a
+reorder buffer on top of this (see `ElasticStage.spin_once()`), not just
+MergeBus alone.
+
+Also see cv_flow/dam/bus.py's concurrency note: peek()-then-read() here is
+two separate calls with no atomicity between them, so a genuine concurrent
+writer process can race this read in rare cases. `ElasticStage` does not
+use this class directly for that reason — it does its own per-worker
+peek/read under a `multiprocessing.Lock` shared with that worker.
 """
 from __future__ import annotations
 

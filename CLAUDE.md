@@ -5,7 +5,7 @@ depends on `cv-flow`, or working inside this repo. It is not a user-facing
 README (see `README.md`) — it exists so you don't have to re-derive API
 shape, gotchas, and current real/stub status from scratch every time.
 
-**Last updated:** v0.3.0 (2026-06-30, Phase 1 of the Jetson hardening plan).
+**Last updated:** v0.4.0 (2026-06-30, Phase 2 of the Jetson hardening plan).
 Re-check `CHANGELOG.md`'s latest entry before trusting anything below if a
 lot of time has passed — this file is a snapshot, not a live source of truth.
 
@@ -119,19 +119,52 @@ List everything available with parameters: `cv-flow list-nodes`, or read
   default `"imagenet"` (mean/std normalized) — the default is meant for
   ImageNet-classifier-style models. Using the wrong one silently produces
   garbage detections, no error.
-- **Elastic config (`elastic`/`max_replicas`/`queue_depth` in `.topic`
-  files) is parsed into `TopicDef` but NOT YET wired to anything** —
-  `Executor.scale_up()`/`scale_down()` are still empty hooks as of v0.3.0.
-  Don't assume setting `elastic: true` in a `.topic` file actually spawns
-  workers yet; check `CHANGELOG.md` for whether Phase 2 (v0.4.0+) landed.
-- **`CudaPortBus` does NOT do real CUDA IPC yet** (as of v0.3.0) — it
-  always round-trips GPU tensors through CPU RAM, despite the class name.
-  Don't rely on it for zero-copy GPU-to-GPU transfer between processes
-  until `CHANGELOG.md` confirms Phase 2 landed.
+- **Real elastic scaling exists via `cv_flow.elastic.ElasticStage`** (since
+  v0.4.0) — NOT via the `elastic`/`max_replicas` fields in `.topic` files
+  (those are still parsed into `TopicDef` but not auto-consumed; elastic
+  scaling is opt-in and explicit, not config-driven). Put `ElasticStage`
+  directly in your node list wherever the wrapped transform node would
+  otherwise go:
+  ```python
+  import functools
+  from cv_flow.elastic import ElasticStage
+  from cv_flow.nodes import YoloInference
+
+  stage = ElasticStage(
+      "yolo_input", "yolo_raw",
+      node_factory=functools.partial(YoloInference, model_path="yolov8n.onnx",
+                                      device="cuda:0", trt_cache_dir=".trt_cache"),
+      initial_replicas=1, max_replicas=2,   # keep small on an 8GB Jetson — each
+                                              # replica loads its own full model
+  )
+  cv_flow.Executor([..., stage, ...], elastic=True).spin()
+  ```
+  `node_factory` must be picklable (spawn start method) — a class +
+  `functools.partial(..., kw=...)` works, a lambda does not. Real
+  correctness (no lost/duplicated/misordered frames across real worker
+  processes) is unit-tested in `tests/test_elastic.py` — read that file's
+  module docstring before changing `cv_flow/elastic.py`, it documents two
+  real concurrency bugs that were found and fixed building this (worker
+  output seq numbering, and a genuine `PortBus` cross-process race — see
+  the next bullet).
+- **`PortBus`/`MergeBus` are NOT safe for a real concurrent writer process
+  + reader process on the same bus** without external locking — only for
+  the common case of one side at a time (true for every plain
+  single-process pipeline in this codebase). `ElasticStage` works around
+  this with a `multiprocessing.Lock` per worker; if you write NEW code with
+  a genuine concurrent writer+reader on one `PortBus` (not through
+  `ElasticStage`), you need the same kind of locking — see the concurrency
+  notes in `cv_flow/dam/bus.py` and `cv_flow/dam/merge.py`.
+- **`CudaPortBus` does NOT do real CUDA IPC, and a real attempt confirmed
+  it isn't viable on this Jetson's integrated GPU** (see `CHANGELOG.md`
+  `[0.4.0]`) — it always round-trips GPU tensors through CPU RAM, despite
+  the class name. This is the final status, not a "later" gap — don't
+  attempt the same `torch.multiprocessing.reductions.reduce_tensor()`
+  approach again expecting a different result on Jetson hardware.
 
 ## Hardware verification status (don't assume more than this)
 
-| Component | Status as of v0.3.0 |
+| Component | Status as of v0.4.0 |
 |---|---|
 | USB camera capture (`CameraSource(device_index=...)`) | **Verified on real hardware** (Intel RealSense color stream) |
 | CSI camera (`CameraSource(gstreamer_pipeline=...)`, `build_nvargus_pipeline()`) | Code + unit-tested string generation only — **no physical CSI sensor tested yet** |
@@ -140,9 +173,10 @@ List everything available with parameters: `cv-flow list-nodes`, or read
 | Full pipeline (camera → infer → NMS → track → draw → video) | **Verified end-to-end on real hardware**, `scripts/smoke_pipeline.py`, ~7.9 FPS at 1280×720 input |
 | `StreamViewer` (WebSocket) | Code reviewed only, no real client connected |
 | `MqttPublisher` | Code reviewed only, no real broker connected |
-| `CudaPortBus` real CUDA IPC | Not implemented (Phase 2) |
-| Elastic multiprocessing auto-scale | Not implemented (Phase 2) |
+| `CudaPortBus` real CUDA IPC | **Investigated for real, confirmed not viable on this hardware** — stays CPU-roundtrip, documented honestly (not a "later" gap) |
+| `ElasticStage` real multiprocessing auto-scale | **Verified on real hardware**: real worker process spawn/scale-up/scale-down/shutdown, zero lost/duplicated/misordered frames across repeated stress runs — `tests/test_elastic.py`. NOT yet exercised with a real GPU-bound node_factory (only a trivial CPU numpy worker) — combining with real `YoloInference` workers is logically straightforward (same `node_factory` pattern already used in this file's example) but not itself separately verified end-to-end. |
 | Backend `PipelineStore` (SQLite) | **Verified**: a record written by one process is readable after a simulated restart |
+| Local wheel build + offline install | **Verified**: `scripts/build_wheel.sh` → installed into an isolated env via `--no-index --find-links` → imports work |
 
 ## Where to look for more
 
