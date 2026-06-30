@@ -1,9 +1,27 @@
 """
-cv_flow.dam.cuda_bus — CudaPortBus: GPU VRAM channel.
+cv_flow.dam.cuda_bus — CudaPortBus: GPU-tensor-aware channel.
 
-Uses CUDA IPC handles to share GPU tensor data between processes.
-Automatically falls back to PortBus (CPU shared memory) when no GPU is
-available — import this module unconditionally; check _CUDA_AVAILABLE.
+Despite the name, this does NOT do real CUDA IPC (zero-copy cross-process
+GPU memory sharing) — every write/read round-trips the tensor through CPU
+shared memory (PortBus). This was attempted for real using
+torch.multiprocessing.reductions.reduce_tensor() (the standard mechanism
+torch itself uses for cross-process CUDA tensor sharing) and confirmed NOT
+viable on Jetson Orin Nano (JetPack 6, tested 2026-06-30): the rebuild call
+in the receiving process fails with
+`torch.AcceleratorError: CUDA error: invalid argument` from
+`torch.UntypedStorage._new_shared_cuda`, consistently, regardless of
+explicit `torch.cuda.set_device()`/`torch.cuda.init()` in the child. This
+matches Jetson's integrated-GPU (unified host/device memory) architecture
+not supporting the standard `cudaIpcGetMemHandle`/`cudaIpcOpenMemHandle`
+mechanism, which is designed for discrete GPUs with separate VRAM
+addressable over PCIe from multiple processes.
+
+Practical effect: GPU-bound elastic worker processes on this hardware must
+each do their own host<->device copy (exactly what this class already
+does) rather than share one GPU buffer — there is currently no known
+zero-copy alternative on Jetson without dropping to very low-level CUDA
+driver calls (cudaHostAlloc/cudaHostGetDevicePointer) that are out of
+scope here. Import this module unconditionally; check _CUDA_AVAILABLE.
 """
 from __future__ import annotations
 
@@ -56,11 +74,13 @@ class CudaPortBus:
             import torch
             self._device = torch.device(device)
 
-        # IPC handle size = 64 bytes (standard CUDA IPC mem handle)
-        # We store the handle in the PortBus data slot; actual tensor lives in VRAM.
-        ipc_slot = 64 if self.using_cuda else slot_bytes
+        # No real CUDA IPC (see module docstring) — every tensor round-trips
+        # through CPU shared memory, so the slot must fit the FULL tensor,
+        # same as plain PortBus. (A previous version capped this at the
+        # 64-byte size of a CUDA IPC handle and silently truncated any
+        # tensor larger than that — fixed.)
         self._bus = PortBus(
-            name, ipc_slot,
+            name, slot_bytes,
             queue_depth=queue_depth,
             create=create,
             drop_mode=drop_mode,
@@ -68,6 +88,11 @@ class CudaPortBus:
         self._slot_bytes = slot_bytes
 
     # ── write ─────────────────────────────────────────────────────────────────
+
+    # Reserved metadata key used to carry the original tensor's dtype/shape
+    # across the CPU round-trip so read() can reconstruct it exactly
+    # (a flat byte buffer alone loses both).
+    _TENSOR_INFO_KEY = "__cv_flow_cuda_tensor__"
 
     def write(
         self,
@@ -80,26 +105,32 @@ class CudaPortBus:
         """
         Write one frame.
 
-        If CUDA is available and data is a GPU tensor, stores a CUDA IPC
-        handle. Otherwise falls back to raw bytes.
+        If CUDA is available and data is a torch.Tensor, copies it to CPU
+        and stores the *full* tensor bytes (not truncated — see module
+        docstring for why this is not zero-copy real CUDA IPC) plus its
+        dtype/shape (so read() can reconstruct it exactly). Otherwise
+        writes raw bytes, same as plain PortBus.
         """
         det_list  = detections or []
-        meta_dict = metadata   or {}
+        meta_dict = dict(metadata or {})
 
         if self.using_cuda:
             import torch
             if isinstance(data, torch.Tensor):
-                if data.device.type == "cpu":
-                    data = data.cuda(self._device)
-                # Store tensor via IPC handle
-                handle_bytes = data.storage().share_memory_()
-                # For simplicity in this implementation, copy to CPU bytes
-                # (full IPC across separate processes requires OS-level CUDA IPC)
-                raw = data.cpu().numpy().tobytes()[:self._slot_bytes]
-                raw = raw.ljust(64, b"\x00")[:64]
+                cpu_tensor = data.cpu() if data.device.type != "cpu" else data
+                raw = cpu_tensor.numpy().tobytes()
+                if len(raw) > self._slot_bytes:
+                    raise ValueError(
+                        f"CudaPortBus '{self.name}': tensor is {len(raw)} bytes, "
+                        f"exceeds slot_bytes={self._slot_bytes}"
+                    )
+                meta_dict[self._TENSOR_INFO_KEY] = {
+                    "dtype": str(cpu_tensor.dtype).removeprefix("torch."),
+                    "shape": list(cpu_tensor.shape),
+                }
                 return self._bus.write(raw, seq,
                                        detections=det_list, metadata=meta_dict)
-            # non-tensor path
+            # non-tensor path falls through to raw bytes below
         raw = bytes(data) if not isinstance(data, (bytes, bytearray)) else data
         return self._bus.write(raw[:self._bus.slot_bytes], seq,
                                detections=det_list, metadata=meta_dict)
@@ -114,20 +145,29 @@ class CudaPortBus:
         Read one frame.
 
         Returns (tensor_or_bytes, seq_no, detections, metadata).
-        If CUDA is available, returns a torch.Tensor on self._device.
-        Otherwise returns raw bytes.
+        If CUDA is available and the frame was written from a tensor,
+        returns a torch.Tensor on self._device with the original
+        dtype/shape restored. Otherwise returns raw bytes.
         """
         result = self._bus.read(timeout_ms=timeout_ms)
         if result is None:
             return None
         raw, seq, dets, meta = result
 
-        if self.using_cuda:
+        tensor_info = meta.pop(self._TENSOR_INFO_KEY, None) if isinstance(meta, dict) else None
+        if self.using_cuda and tensor_info is not None:
             import torch
             import numpy as np
-            tensor = torch.from_numpy(
-                np.frombuffer(raw, dtype=np.uint8).copy()
-            ).to(self._device)
+            np_dtype = np.dtype(getattr(np, tensor_info["dtype"]))
+            shape = tensor_info["shape"]
+            n_elements = 1
+            for dim in shape:
+                n_elements *= dim
+            n_bytes = n_elements * np_dtype.itemsize
+            # raw is padded out to the bus's fixed slot_bytes — slice back
+            # down to the tensor's actual byte length before reshaping.
+            arr = np.frombuffer(raw[:n_bytes], dtype=np_dtype).reshape(shape).copy()
+            tensor = torch.from_numpy(arr).to(self._device)
             return tensor, seq, dets, meta
 
         return raw, seq, dets, meta
