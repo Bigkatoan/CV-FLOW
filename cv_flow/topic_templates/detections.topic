@@ -1,0 +1,8 @@
+# Transform topic: raw YOLO output -> NMS-filtered detections
+input: -> cpu
+   - raw : float32 shape=[1, 84, 8400]
+
+output: -> cpu
+   - boxes     : float32 shape=[512, 4]
+   - scores    : float32 shape=[512]
+   - class_ids : int32   shape=[512]

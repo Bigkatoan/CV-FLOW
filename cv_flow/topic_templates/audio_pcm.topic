@@ -1,0 +1,4 @@
+# Source topic: raw PCM audio samples (mono, 16-bit, 16kHz chunks of 1024 samples)
+output: -> cpu
+   - samples : int16 shape=[1024]
+   - seq     : uint64

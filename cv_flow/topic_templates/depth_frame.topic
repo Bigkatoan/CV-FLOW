@@ -1,0 +1,4 @@
+# Source topic: depth sensor output (e.g. RealSense), 16-bit depth in mm
+output: -> cpu
+   - depth : 16UC1  shape=[480, 640]
+   - seq    : uint64

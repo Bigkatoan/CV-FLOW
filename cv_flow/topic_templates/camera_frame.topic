@@ -1,0 +1,4 @@
+# Source topic: raw camera frame output (USB/RTSP/video file)
+output: -> cpu
+   - frame : bgr8   shape=[720, 1280]
+   - seq   : uint64

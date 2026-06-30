@@ -1,0 +1,4 @@
+# Sink-bound topic: frame with bounding boxes drawn, ready for display/stream
+output: -> cpu
+   - frame : bgr8 shape=[720, 1280]
+   - seq   : uint64

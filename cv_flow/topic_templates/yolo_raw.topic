@@ -1,0 +1,10 @@
+# Transform topic: tensor -> raw YOLO model output (elastic-capable inference stage)
+elastic: true
+max_replicas: 4
+queue_depth: 8
+
+input: -> cpu
+   - tensor : float32 shape=[1, 3, 640, 640]
+
+output: -> cpu
+   - raw : float32 shape=[1, 84, 8400]

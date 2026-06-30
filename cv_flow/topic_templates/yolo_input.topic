@@ -1,0 +1,6 @@
+# Transform topic: BGR frame -> preprocessed CHW float32 tensor for YOLO
+input: -> cpu
+   - frame : bgr8 shape=[720, 1280]
+
+output: -> cpu
+   - tensor : float32 shape=[1, 3, 640, 640]

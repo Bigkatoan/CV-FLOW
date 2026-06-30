@@ -1,0 +1,9 @@
+# Transform topic: detections -> tracked objects with persistent track_id
+input: -> cpu
+   - boxes     : float32 shape=[512, 4]
+   - scores    : float32 shape=[512]
+   - class_ids : int32   shape=[512]
+
+output: -> cpu
+   - tracked : float32 shape=[512, 7]
+   - seq     : uint64

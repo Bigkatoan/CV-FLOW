@@ -1,0 +1,8 @@
+# Sink topic: JPEG-encoded frame bytes for WebSocket streaming
+drop_mode: true
+queue_depth: 4
+
+input: -> cpu
+   - jpeg_bytes : uint8  shape=[262144]
+   - jpeg_len   : uint32
+   - seq        : uint64

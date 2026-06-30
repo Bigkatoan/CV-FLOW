@@ -1,0 +1,6 @@
+# Transform topic: cropped face/object frame -> feature embedding vector
+input: -> cpu
+   - crop : bgr8 shape=[112, 112]
+
+output: -> cpu
+   - vector : float32 shape=[512]

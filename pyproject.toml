@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cv-flow"
+version = "0.2.0"
+description = "DAM-backed Computer Vision pipeline (ROS2-inspired, topic-based)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.26.0",
+    "opencv-python>=4.10.0",
+    "onnxruntime>=1.18.0",
+]
+
+[project.optional-dependencies]
+gpu    = ["torch>=2.0.0"]
+mqtt   = ["paho-mqtt>=2.0.0"]
+stream = ["websockets>=12.0"]
+backend = ["fastapi>=0.111.0", "uvicorn>=0.30.0", "sqlalchemy>=2.0.0", "aiosqlite>=0.20.0"]
+dev    = ["pytest>=9.0.0", "pytest-asyncio>=0.23.0", "httpx>=0.27.0"]
+
+[project.scripts]
+cv-flow = "cv_flow.cli:main"
+
+[tool.setuptools.packages.find]
+where   = ["."]
+include = ["cv_flow*"]
+
+[tool.setuptools.package-data]
+"cv_flow" = ["lib/*.so", "topic_templates/*.topic"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-p no:launch_testing -p no:launch_pytest -p no:launch_ros -p no:ament_pep257 -p no:ament_copyright -p no:ament_flake8 -p no:ament_lint -p no:ament_xmllint"
