@@ -22,8 +22,15 @@ build/
 # Large model fixtures — regenerate with the command in
 # tests/nodes/test_inference.py's skip message instead of committing binaries.
 tests/fixtures/*.onnx
+tests/fixtures/*.engine
 .trt_cache/
 *.trt_cache/
+
+# DeepStream benchmark artifacts (regenerate — see scripts/deepstream_bench/README.md)
+scripts/deepstream_bench/*.engine
+scripts/deepstream_bench/test_input.mp4
+scripts/deepstream_bench/*.jpg
+scripts/deepstream_bench/*_out.mp4
 
 # Editor / OS
 .vscode/
